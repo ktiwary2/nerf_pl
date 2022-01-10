@@ -7,9 +7,9 @@ def get_opts():
                         default='/home/ubuntu/data/nerf_example_data/nerf_synthetic/lego',
                         help='root directory of dataset')
     parser.add_argument('--dataset_name', type=str, default='blender',
-                        choices=['blender', 'llff'],
+                        choices=['blender', 'llff', "pyredner"],
                         help='which dataset to train/val')
-    parser.add_argument('--img_wh', nargs="+", type=int, default=[800, 800],
+    parser.add_argument('--img_wh', nargs="+", type=int, default=[128, 128],
                         help='resolution (img_w, img_h) of the image')
     parser.add_argument('--spheric_poses', default=False, action="store_true",
                         help='whether images are taken in spheric poses (for llff)')
@@ -31,7 +31,7 @@ def get_opts():
 
     parser.add_argument('--batch_size', type=int, default=1024,
                         help='batch size')
-    parser.add_argument('--chunk', type=int, default=32*1024,
+    parser.add_argument('--chunk', type=int, default=32*4,
                         help='chunk size to split the input to avoid OOM')
     parser.add_argument('--num_epochs', type=int, default=16,
                         help='number of training epochs')
