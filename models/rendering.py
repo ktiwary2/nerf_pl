@@ -11,12 +11,12 @@ Function dependencies: (-> means function calls)
 @render_rays -> @sample_pdf if there is fine model
 """
 
-def sample_pdf(bins, weights, N_importance, det=False, eps=1e-5):
+def sample_pdf(rays, weights, N_importance, det=False, eps=1e-5):
     """
     Sample @N_importance samples from @bins with distribution defined by @weights.
-
+    from https://github.com/sxyu/pixel-nerf/blob/master/src/render/nerf.py#L120
     Inputs:
-        bins: (N_rays, N_samples_+1) where N_samples_ is "the number of coarse samples per ray - 2"
+        rays: (N_rays, N_samples_+1) where N_samples_ is "the number of coarse samples per ray - 2"
         weights: (N_rays, N_samples_)
         N_importance: the number of samples to draw from the distribution
         det: deterministic or not
@@ -25,34 +25,60 @@ def sample_pdf(bins, weights, N_importance, det=False, eps=1e-5):
     Outputs:
         samples: the sampled samples
     """
+    torch.cuda.empty_cache()
     N_rays, N_samples_ = weights.shape
     weights = weights + eps # prevent division by zero (don't do inplace op!)
     pdf = weights / torch.sum(weights, -1, keepdim=True) # (N_rays, N_samples_)
     cdf = torch.cumsum(pdf, -1) # (N_rays, N_samples), cumulative distribution function
     cdf = torch.cat([torch.zeros_like(cdf[: ,:1]), cdf], -1)  # (N_rays, N_samples_+1) 
                                                                # padded to 0~1 inclusive
+                                                               
+    u = torch.rand(N_rays, N_importance, device=rays.device) # (N_rays, N_samples)
+    inds = searchsorted(cdf, u, side='right').float() - 1.0 # (N_rays, N_samples)
+    # inds = torch.searchsorted(cdf, u, right=True).float() - 1.0  # (B, Kf)
+    inds = torch.clamp_min(inds, 0.0)
 
-    if det:
-        u = torch.linspace(0, 1, N_importance, device=bins.device)
-        u = u.expand(N_rays, N_importance)
-    else:
-        u = torch.rand(N_rays, N_importance, device=bins.device)
-    u = u.contiguous()
+    z_steps = (inds + torch.rand_like(inds)) / N_samples_  # (B, Kf)
 
-    inds = searchsorted(cdf, u, side='right')
-    below = torch.clamp_min(inds-1, 0)
-    above = torch.clamp_max(inds, N_samples_)
+    near, far = rays[:, -2:-1], rays[:, -1:]  # (B, 1)
+    # if not self.lindisp:  # Use linear sampling in depth space
+    z_samp = near * (1 - z_steps) + far * z_steps  # (B, Kf)
+    # else:  # Use linear sampling in disparity space
+        # z_samp = 1 / (1 / near * (1 - z_steps) + 1 / far * z_steps)  # (B, Kf)
+    return z_samp
 
-    inds_sampled = torch.stack([below, above], -1).view(N_rays, 2*N_importance)
-    cdf_g = torch.gather(cdf, 1, inds_sampled).view(N_rays, N_importance, 2)
-    bins_g = torch.gather(bins, 1, inds_sampled).view(N_rays, N_importance, 2)
 
-    denom = cdf_g[...,1]-cdf_g[...,0]
-    denom[denom<eps] = 1 # denom equals 0 means a bin has weight 0, in which case it will not be sampled
-                         # anyway, therefore any value for it is fine (set to 1 here)
+    # if det:
+    #     u = torch.linspace(0, 1, N_importance, device=bins.device)
+    #     u = u.expand(N_rays, N_importance)
+    # else:
+        
+    # u = u.contiguous()
 
-    samples = bins_g[...,0] + (u-cdf_g[...,0])/denom * (bins_g[...,1]-bins_g[...,0])
-    return samples
+    # inds = searchsorted(cdf, u, side='right')
+    # below = torch.clamp_min(inds-1, 0)
+    # above = torch.clamp_max(inds, N_samples_)
+
+    # inds_sampled = torch.stack([below, above], -1).view(N_rays, 2*N_importance)
+    # print("inds_sampled", inds_sampled)
+    # print(inds_sampled.shape)
+    # print("cdf", cdf)
+    # print(cdf.shape)
+    # print("gather", torch.gather(cdf, 1, inds_sampled))
+    # print("gather", torch.gather(cdf, 1, inds_sampled).shape)
+    # cdf_g = torch.gather(cdf, 1, inds_sampled).view(N_rays, N_importance, 2)
+    # bins_g = torch.gather(bins, 1, inds_sampled).view(N_rays, N_importance, 2)
+
+    # denom = cdf_g[...,1]-cdf_g[...,0]
+    # print("denom.shape", denom.shape)
+    # print("cdf_g",cdf_g)
+    # print(cdf_g.shape)
+    # print("denom", denom)
+    # denom[denom<eps] = 1 # denom equals 0 means a bin has weight 0, in which case it will not be sampled
+    #                      # anyway, therefore any value for it is fine (set to 1 here)
+
+    # samples = bins_g[...,0] + (u-cdf_g[...,0])/denom * (bins_g[...,1]-bins_g[...,0])
+    # return samples
 
 
 def render_rays(models,
@@ -179,6 +205,7 @@ def render_rays(models,
 
     # Decompose the inputs
     N_rays = rays.shape[0]
+    # print("rays: ", rays.shape)
     rays_o, rays_d = rays[:, 0:3], rays[:, 3:6] # both (N_rays, 3)
     near, far = rays[:, 6:7], rays[:, 7:8] # both (N_rays, 1)
 
@@ -188,6 +215,7 @@ def render_rays(models,
     # Sample depth points
     z_steps = torch.linspace(0, 1, N_samples, device=rays.device) # (N_samples)
     if not use_disp: # use linear sampling in depth space
+        # print(near.shape, z_steps.shape, far.shape)
         z_vals = near * (1-z_steps) + far * z_steps
     else: # use linear sampling in disparity space
         z_vals = 1/(1/near * (1-z_steps) + 1/far * z_steps)
@@ -221,8 +249,8 @@ def render_rays(models,
                  }
 
     if N_importance > 0: # sample points for fine model
-        z_vals_mid = 0.5 * (z_vals[: ,:-1] + z_vals[: ,1:]) # (N_rays, N_samples-1) interval mid points
-        z_vals_ = sample_pdf(z_vals_mid, weights_coarse[:, 1:-1],
+        # z_vals_mid = 0.5 * (z_vals[: ,:-1] + z_vals[: ,1:]) # (N_rays, N_samples-1) interval mid points
+        z_vals_ = sample_pdf(rays, weights_coarse[:, 1:-1],
                              N_importance, det=(perturb==0)).detach()
                   # detach so that grad doesn't propogate to weights_coarse from here
 

@@ -31,7 +31,7 @@ def get_opts():
 
     parser.add_argument('--batch_size', type=int, default=1024,
                         help='batch size')
-    parser.add_argument('--chunk', type=int, default=32*4,
+    parser.add_argument('--chunk', type=int, default=32*256,
                         help='chunk size to split the input to avoid OOM')
     parser.add_argument('--num_epochs', type=int, default=16,
                         help='number of training epochs')
@@ -74,5 +74,12 @@ def get_opts():
 
     parser.add_argument('--exp_name', type=str, default='exp',
                         help='experiment name')
+
+    parser.add_argument('--black_and_white_test', default=False, action="store_true",
+                        help='Converts all images to black and white images.')
+
+    parser.add_argument('--num_sanity_val_steps', default=1, type=int,
+                        help='Converts all images to black and white images.')
+
 
     return parser.parse_args()

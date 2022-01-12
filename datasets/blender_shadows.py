@@ -8,7 +8,7 @@ from torchvision import transforms as T
 
 from .ray_utils import *
 
-class BlenderDataset(Dataset):
+class BlenderDatasetShadows(Dataset):
     def __init__(self, root_dir, split='train', img_wh=(800, 800), hparams=None):
         self.root_dir = root_dir
         self.split = split
@@ -37,11 +37,9 @@ class BlenderDataset(Dataset):
         self.focal *= self.img_wh[0]/800 # modify focal length to match size self.img_wh
 
         # bounds, common for all scenes
-        # self.near = 1.0
-        # self.far = 200.0
-        # bounds, common for all scenes
-        self.near = 2.0
-        self.far = 6.0
+        self.near = 1.0
+        self.far = 150.0
+
         self.bounds = np.array([self.near, self.far])
         
         # ray directions for all pixels, same for all images (same H, W, focal)
@@ -57,8 +55,13 @@ class BlenderDataset(Dataset):
                 pose = np.array(frame['transform_matrix'])[:3, :4]
                 self.poses += [pose]
                 c2w = torch.FloatTensor(pose)
+                #### change it to load the shadow map
+                file_path = frame['file_path'].split('/')
+                file_path[-1] = 'sm_'+ file_path[-1]
+                file_path = '/'.join(file_path[-1])
+                ################
+                image_path = os.path.join(self.root_dir, f"{file_path}.png")
 
-                image_path = os.path.join(self.root_dir, f"{frame['file_path']}.png")
                 self.image_paths += [image_path]
                 
                 img = Image.open(image_path)

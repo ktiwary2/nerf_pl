@@ -1,4 +1,6 @@
 import os, sys
+
+import imageio
 from opt import get_opts
 import torch
 from collections import defaultdict
@@ -24,6 +26,9 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.logging import TestTubeLogger
 
+to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
+
+
 class NeRFSystem(LightningModule):
     def __init__(self, hparams):
         super(NeRFSystem, self).__init__()
@@ -42,19 +47,25 @@ class NeRFSystem(LightningModule):
             self.models += [self.nerf_fine]
 
     def decode_batch(self, batch):
-        all_rgb_gt = batch["rgb"]  # (num_images, H*W, 3)
-        all_rgb_gt = all_rgb_gt.reshape(-1, 3)
+        if self.hparams.dataset_name == 'pyredner':
+            all_rgb_gt = batch["rgb"]  # (num_images, H*W, 3)
+            all_rgb_gt = all_rgb_gt.reshape(-1, 3)
 
-        cam_all_rays = batch["cam_ray_bundle"] # (num_images, H*W, 8)
-        cam_all_rays = cam_all_rays.reshape(-1, 8)
-        light_all_rays = batch["light_ray_bundle"] # (num_images, H*W, 8)
-        light_all_rays = light_all_rays.reshape(-1, 8)
+            cam_all_rays = batch["cam_ray_bundle"] # (num_images, H*W, 8)
+            cam_all_rays = cam_all_rays.reshape(-1, 8)
+            light_all_rays = batch["light_ray_bundle"] # (num_images, H*W, 8)
+            light_all_rays = light_all_rays.reshape(-1, 8)
 
-        shadow_maps = batch["shadow_maps"]
-        shadow_maps = shadow_maps.reshape(-1, 3)
-        shadow_maps = None
+            shadow_maps = batch["shadow_maps"]
+            shadow_maps = shadow_maps.reshape(-1, 3)
+            shadow_maps = None
 
-        return cam_all_rays, light_all_rays, all_rgb_gt, shadow_maps
+            return cam_all_rays, light_all_rays, all_rgb_gt, shadow_maps
+        else:
+            rays = batch['rays'] # (B, 8)
+            rgbs = batch['rgbs'] # (B, 3)
+            # print("decode batch", rays.shape, rgbs.shape)
+            return rays, rgbs
 
     def forward(self, rays):
         """Do batched inference on rays using chunk."""
@@ -83,7 +94,9 @@ class NeRFSystem(LightningModule):
     def prepare_data(self):
         dataset = dataset_dict[self.hparams.dataset_name]
         kwargs = {'root_dir': self.hparams.root_dir,
-                  'img_wh': tuple(self.hparams.img_wh)}
+                  'img_wh': tuple(self.hparams.img_wh), 
+                  'hparams': self.hparams
+                  }
         if self.hparams.dataset_name == 'llff':
             kwargs['spheric_poses'] = self.hparams.spheric_poses
             kwargs['val_num'] = self.hparams.num_gpus
@@ -112,13 +125,18 @@ class NeRFSystem(LightningModule):
     
     def training_step(self, batch, batch_nb):
         log = {'lr': get_learning_rate(self.optimizer)}
-        cam_all_rays, light_all_rays, all_rgb_gt, shadow_maps = self.decode_batch(batch)
-        results = self(cam_all_rays)
-        log['train/loss'] = loss = self.loss(results, all_rgb_gt)
+        if self.hparams.dataset_name == 'pyredner':
+            cam_all_rays, light_all_rays, rgbs, shadow_maps = self.decode_batch(batch)
+            results = self(cam_all_rays)
+        else: 
+            rays, rgbs = self.decode_batch(batch)
+            results = self(rays)
+
+        log['train/loss'] = loss = self.loss(results, rgbs)
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
 
         with torch.no_grad():
-            psnr_ = psnr(results[f'rgb_{typ}'], all_rgb_gt)
+            psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
             log['train/psnr'] = psnr_
 
         return {'loss': loss,
@@ -127,19 +145,40 @@ class NeRFSystem(LightningModule):
                }
 
     def validation_step(self, batch, batch_nb):
-        cam_all_rays, light_all_rays, all_rgb_gt, shadow_maps = self.decode_batch(batch)
-        rays = cam_all_rays.squeeze() # (H*W, 3)
-        rgbs = all_rgb_gt.squeeze() # (H*W, 3)
-        results = self(rays)
+        print("---------------Starting Validation---------------")
+        if self.hparams.dataset_name == 'pyredner':
+            cam_all_rays, light_all_rays, rgbs, shadow_maps = self.decode_batch(batch)
+            rays = cam_all_rays.squeeze() # (H*W, 3)
+            rgbs = rgbs.squeeze() # (H*W, 3)
+            results = self(cam_all_rays)
+        else: 
+            rays, rgbs = self.decode_batch(batch)
+            rays = rays.squeeze() # (H*W,3)
+            rgbs = rgbs.squeeze() # (H*W,3)
+            results = self(rays)
+
         log = {'val_loss': self.loss(results, rgbs)}
         typ = 'fine' if 'rgb_fine' in results else 'coarse'
     
         if batch_nb == 0:
+            print("---------------Evaluating and saving Images!---------------")
             W, H = self.hparams.img_wh
             img = results[f'rgb_{typ}'].view(H, W, 3).cpu()
+            rgb8 = to8b(img.numpy())
+            gt8 = to8b(rgbs.view(H, W, 3).cpu().numpy())
             img = img.permute(2, 0, 1) # (3, H, W)
             img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
+            depth8 = visualize_depth(results[f'depth_{typ}'].view(H, W), to_tensor=False) 
             depth = visualize_depth(results[f'depth_{typ}'].view(H, W)) # (3, H, W)
+            if not os.path.exists(f'logs/{self.hparams.exp_name}/imgs'):
+                os.mkdir(f'logs/{self.hparams.exp_name}/imgs')
+            filename = os.path.join(f'logs/{self.hparams.exp_name}/imgs', 'gt_{:03d}.png'.format(self.current_epoch))
+            imageio.imwrite(filename, gt8)
+            filename = os.path.join(f'logs/{self.hparams.exp_name}/imgs', 'rgb_{:03d}.png'.format(self.current_epoch))
+            imageio.imwrite(filename, rgb8)
+            filename = os.path.join(f'logs/{self.hparams.exp_name}/imgs', 'depth_{:03d}.png'.format(self.current_epoch))
+            imageio.imwrite(filename, depth8)
+
             stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
             self.logger.experiment.add_images('val/GT_pred_depth',
                                                stack, self.global_step)
@@ -183,8 +222,9 @@ if __name__ == '__main__':
                       progress_bar_refresh_rate=1,
                       gpus=hparams.num_gpus,
                       distributed_backend='ddp' if hparams.num_gpus>1 else None,
-                      num_sanity_val_steps=0,
+                      num_sanity_val_steps=hparams.num_sanity_val_steps,
                       benchmark=True,
-                      profiler=hparams.num_gpus==1)
+                      profiler=hparams.num_gpus==1, 
+                      auto_scale_batch_size=True)
 
     trainer.fit(system)
