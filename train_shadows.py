@@ -53,17 +53,19 @@ class NeRFSystem(LightningModule):
 
             cam_all_rays = batch["cam_ray_bundle"] # (num_images, H*W, 8)
             cam_all_rays = cam_all_rays.reshape(-1, 8)
-            light_all_rays = batch["light_ray_bundle"] # (num_images, H*W, 8)
-            light_all_rays = light_all_rays.reshape(-1, 8)
+            # light_all_rays = batch["light_ray_bundle"] # (num_images, H*W, 8)?
+            # light_all_rays = light_all_rays.reshape(-1, 8)
 
-            shadow_maps = batch["shadow_maps"]
-            shadow_maps = shadow_maps.reshape(-1, 3)
-            shadow_maps = None
+            # shadow_maps = batch["shadow_maps"]
+            # shadow_maps = shadow_maps.reshape(-1, 3)
+            # shadow_maps = None
 
-            return cam_all_rays, light_all_rays, all_rgb_gt, shadow_maps
+            return all_rgb_gt, cam_all_rays, None, None
         else:
             rays = batch['rays'] # (B, 8)
+            # print("rays.shape",rays.shape)
             rgbs = batch['rgbs'] # (B, 3)
+            # print("rgbs.shape",rgbs.shape)
             # print("decode batch", rays.shape, rgbs.shape)
             return rays, rgbs
 
@@ -126,7 +128,7 @@ class NeRFSystem(LightningModule):
     def training_step(self, batch, batch_nb):
         log = {'lr': get_learning_rate(self.optimizer)}
         if self.hparams.dataset_name == 'pyredner':
-            cam_all_rays, light_all_rays, rgbs, shadow_maps = self.decode_batch(batch)
+            rgbs, cam_all_rays, _, _ = self.decode_batch(batch)
             results = self(cam_all_rays)
         else: 
             rays, rgbs = self.decode_batch(batch)
@@ -147,7 +149,7 @@ class NeRFSystem(LightningModule):
     def validation_step(self, batch, batch_nb):
         print("---------------Starting Validation---------------")
         if self.hparams.dataset_name == 'pyredner':
-            cam_all_rays, light_all_rays, rgbs, shadow_maps = self.decode_batch(batch)
+            rgbs, cam_all_rays, _, _ = self.decode_batch(batch)
             rays = cam_all_rays.squeeze() # (H*W, 3)
             rgbs = rgbs.squeeze() # (H*W, 3)
             results = self(cam_all_rays)
@@ -221,7 +223,7 @@ if __name__ == '__main__':
                       weights_summary=None,
                       progress_bar_refresh_rate=1,
                       gpus=hparams.num_gpus,
-                      distributed_backend='ddp' if hparams.num_gpus>1 else None,
+                      distributed_backend='ddp' if len(hparams.num_gpus)>1 else None,
                       num_sanity_val_steps=hparams.num_sanity_val_steps,
                       benchmark=True,
                       profiler=hparams.num_gpus==1, 

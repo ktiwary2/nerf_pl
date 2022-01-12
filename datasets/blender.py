@@ -37,11 +37,14 @@ class BlenderDataset(Dataset):
         self.focal *= self.img_wh[0]/800 # modify focal length to match size self.img_wh
 
         # bounds, common for all scenes
-        # self.near = 1.0
-        # self.far = 200.0
+        self.near = 1.0
+        self.far = 200.0
+        print("Z NEAR AND FAR BOUNDS ARE: {},{}".format(self.near, self.far))
+        if not (input("PRESS y to continue!!!: ") == 'y'): 
+            raise ValueError("Z NEAR AND FAR BOUNDS ARE: {},{}".format(self.near, self.far))
         # bounds, common for all scenes
-        self.near = 2.0
-        self.far = 6.0
+        # self.near = 2.0
+        # self.far = 6.0
         self.bounds = np.array([self.near, self.far])
         
         # ray directions for all pixels, same for all images (same H, W, focal)
@@ -82,6 +85,10 @@ class BlenderDataset(Dataset):
 
             self.all_rays = torch.cat(self.all_rays, 0) # (len(self.meta['frames])*h*w, 3)
             self.all_rgbs = torch.cat(self.all_rgbs, 0) # (len(self.meta['frames])*h*w, 3)
+        
+            print("Dataset Shapes cam_rays: {}, rgbs: {}".format(
+                self.all_rays.shape, self.all_rgbs.shape))
+
 
     def define_transforms(self):
         self.transform = T.ToTensor()
@@ -116,7 +123,6 @@ class BlenderDataset(Dataset):
                 img = img.view(4, -1).permute(1, 0) # (H*W, 4) RGBA
                 img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
                 
-
             rays_o, rays_d = get_rays(self.directions, c2w)
 
             rays = torch.cat([rays_o, rays_d, 
@@ -130,3 +136,7 @@ class BlenderDataset(Dataset):
                       'valid_mask': valid_mask}
 
         return sample
+
+
+
+# CUDA_LAUNCH_BLOCKING=0 python3 train_shadows.py --root_dir ../datasets/volumetric/results_500/ --dataset blender --num_gpus 4 --exp_name 'blender_cuboid_2_new_znf_bounds' --batch_size 1024 --N_importance 64 --num_epochs 100 --img_wh 400 400 --optimizer adam --lr 5e-4 --lr_scheduler steplr --decay_step 2 4 8 --decay_gamma 0.5
