@@ -43,10 +43,10 @@ class PyRednerDataset(torch.utils.data.Dataset):
 
         self.image_to_tensor = get_image_to_tensor_balanced()
         self.image_size = img_wh
-        # self._coord_trans = torch.diag(
-        #     torch.tensor([1, -1, -1, 1], dtype=torch.float32)
-        # )
-        self._coord_trans = torch.ones((4,4), dtype=torch.float32)
+        self._coord_trans = torch.diag(
+            torch.tensor([1, -1, -1, 1], dtype=torch.float32)
+        )
+        # self._coord_trans = torch.ones((4,4), dtype=torch.float32)
         if not (input("cood_trans is set to: {}. PRESS y TO CONTINUE! ".format(self._coord_trans)) == 'y'):
             raise ValueError("cood_trans is set to: {}".format(self._coord_trans))
 

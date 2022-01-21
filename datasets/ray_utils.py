@@ -21,7 +21,7 @@ def get_ray_directions(H, W, focal):
     directions = \
         torch.stack([(i-W/2)/focal, -(j-H/2)/focal, -torch.ones_like(i)], -1) # (H, W, 3)
 
-    return directions
+    return directions # un normalized directions in the local system of the camera 
 
 
 def get_rays(directions, c2w):
@@ -39,13 +39,13 @@ def get_rays(directions, c2w):
         rays_d: (H*W, 3), the normalized direction of the rays in world coordinate
     """
     # Rotate ray directions from camera coordinate to the world coordinate
-    rays_d = directions @ c2w[:, :3].T # (H, W, 3)
+    rays_d = directions @ c2w[:, :3].T # (H, W, 3) picking the rotation matrix from c2w (3,4 mat) -> c2w[:, :3]
     rays_d = rays_d / torch.norm(rays_d, dim=-1, keepdim=True)
     # The origin of all rays is the camera origin in world coordinate
-    rays_o = c2w[:, 3].expand(rays_d.shape) # (H, W, 3)
+    rays_o = c2w[:, 3].expand(rays_d.shape) # (H, W, 3) picks the translation column of the c2w matrix 
 
-    rays_d = rays_d.view(-1, 3)
-    rays_o = rays_o.view(-1, 3)
+    rays_d = rays_d.view(-1, 3) # [H*W,3]
+    rays_o = rays_o.view(-1, 3) # [H*W,3]
 
     return rays_o, rays_d
 

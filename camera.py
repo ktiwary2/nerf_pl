@@ -5,7 +5,7 @@ import torch
 class Camera():
     def __init__(self, hfov, res, ):
         """
-        Defines a Camera that we will be using to model the world and light. 
+        Defines a PPC (camera) that we will be using to model the world and light. 
         """
         self.camera = self.initialize_camera_matrix(hfov, res)
         self.res = res
@@ -21,7 +21,7 @@ class Camera():
         b = torch.tensor([0.0, -1.0, 0.0])
         hfovd = hfov / torch.tensor(180.0) * np.pi
         c = torch.tensor([-w / 2.0, h / 2, -w / (2 * torch.tan(hfovd / 2.0))])
-        return torch.stack([a,b,c]).T
+        return torch.stack([a,b,c]).T # (3,3)
 
     def get_a(self,):
         return self.camera[:,0]
@@ -51,6 +51,14 @@ class Camera():
         cam_to_world[3, :] = [0, 0, 0, 1]
         return cam_to_world
 
+    def set_pose_using_blender_matrix(self, c2w):
+        """
+        c2w: [3,4] doesn't know what the resolution of the image is (has the extrinsic parameters)
+        pixels = K @ c2w @ p -> ppc @ p 
+        """
+        self.eye_pos = torch.tensor(c2w[:, 3]).float() # Camera location 
+        self.camera = torch.tensor(c2w[:, :3]).float() @ self.camera.float() 
+
     def set_camera_matrix(self, eye_pos, lookAtPoint, upGuidance):
         """
         Sets the camera matrix, eye_pos 
@@ -79,7 +87,7 @@ class Camera():
         focalLength = torch.dot(cross/cross_norm, self.camera[:,2])
         newc = newvd*focalLength - newa*w / 2.0 - newb*h / 2.0
 
-        self.camera = torch.stack([newa,newb,newc]).T 
+        self.camera = torch.stack([newa,newb,newc]).T #  matrix (3,3)
 
     def get_transformation_to(self, to_camera, device='cpu'): 
         """
