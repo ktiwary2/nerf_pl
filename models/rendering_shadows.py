@@ -1,6 +1,7 @@
 import torch
 from torchsearchsorted import searchsorted
 import models.shadow_mapping_utils as shadow_mapping_utils
+from models.camera import Camera
 
 __all__ = ['render_rays']
 
@@ -274,39 +275,64 @@ def shadow_mapping(cam_results, light_results, rays, ppc, light_ppc, image_shape
     batch_size: batch_size
     fine_sampling: set fine_sampling
     """
+    def inference(ppc, light_ppc, image_shape, batch_size, cam_depths, light_depths):
+        """
+        ppc: [Batch_size] Camera Poses: instance of the Camera() class
+        light_ppc: [1] Pose of the Camera at Light position 
+        batch_size: batch_size
+        cam_depths: [batch_size, H, W] depth from camera viewpoints
+        light_depths: [1, H, W] depth from light viewpoint
+        """
+        shadow_maps = []
+        for i in range(batch_size):
+            # print('-------------->', ppc[i], ppc[i].keys())
+            # eye_pos, camera = ppc[i][0], ppc[i][1]
+            cam = Camera.from_camera_eyepos(eye_pos=ppc[i]['eye_pos'].squeeze(0), camera=ppc[i]['camera'].squeeze(0))
+            # eye_pos, camera = light_ppc[0], light_ppc[1]
+            light_cam = Camera.from_camera_eyepos(eye_pos=light_ppc['eye_pos'].squeeze(0), camera=light_ppc['camera'].squeeze(0))
+            sm = shadow_mapping_utils.run_shadow_mapping(image_shape,
+                                                        cam, light_cam, 
+                                                        cam_depths.squeeze(0), light_depths.squeeze(0),
+                                                        device=cam_depths.device, 
+                                                        mode='shadow_method_1',
+                                                        delta=1e-2, epsilon=0.0, new_min=0.0, new_max=1.0, 
+                                                        sigmoid=False, use_numpy_meshgrid=True)
+            shadow_maps += [sm]
+
+        shadow_maps = torch.cat(shadow_maps, 0) # (batch_size, H, W)
+        return shadow_maps
+
     N_rays = rays.shape[0]
     W, H = image_shape
+
+    # Do Shadow Mapping for Coarse Depth 
+    cam_depths_coarse = cam_results['depth_coarse'] # (N_rays)
+    light_depths_coarse = light_results['depth_coarse'] # (N_rays)
+    assert N_rays == cam_depths_coarse.shape[0]
+    assert N_rays == light_depths_coarse.shape[0]
+    device = cam_depths_coarse.device    
+
+    cam_depths_coarse = cam_depths_coarse.view(batch_size, H, W).to(device)
+    light_depths_coarse = light_depths_coarse.view(batch_size, H, W).to(device)
+    shadow_maps_coarse = inference(ppc, light_ppc, image_shape, batch_size, cam_depths_coarse, light_depths_coarse)
+    shadow_maps_coarse = shadow_maps_coarse.view(-1, 3)
+    print("shadow_maps_coarse.shape", shadow_maps_coarse.shape)
+
+    cam_results['rgb_coarse'] = shadow_maps_coarse
+
+    # Do Shadow Mapping for Fine Depth Maps 
     if fine_sampling: # sample points for fine model
-        cam_depths = cam_results['depth_fine'] # (N_rays)
-        light_depths = light_results['depth_fine'] # (N_rays)
-    else:
-        cam_depths = cam_results['depth_coarse'] # (N_rays)
-        light_depths = light_results['depth_coarse'] # (N_rays)
-    
-    device = cam_depths.device    
-    assert N_rays == cam_depths.shape[0]
-    assert N_rays == light_depths.shape[0]
-    cam_depths = cam_depths.view(batch_size, H, W).to(device)
-    light_depths = light_depths.view(batch_size, H, W).to(device)
+        cam_depths_fine = cam_results['depth_fine'] # (N_rays)
+        light_depths_fine = light_results['depth_fine'] # (N_rays)
+        device = cam_depths_fine.device    
+        assert N_rays == cam_depths_fine.shape[0]
+        assert N_rays == light_depths_fine.shape[0]
 
-    shadow_maps = []
-    for i in range(batch_size):
-        sm = shadow_mapping_utils.run_shadow_mapping(image_shape,
-                                                     ppc[i], light_ppc, 
-                                                     cam_depths, light_depths,
-                                                     device=cam_depths.device, 
-                                                     mode='shadow_method_1',
-                                                     delta=1e-2, epsilon=0.0, new_min=0.0, new_max=1.0, 
-                                                     sigmoid=False, use_numpy_meshgrid=True)
-        shadow_maps += [sm]
-
-        shadow_maps = torch.cat(shadow_maps, 0)
-    
-    print("shadow_maps.shape", shadow_maps.shape)
-
-    if fine_sampling: # sample points for fine model
-        cam_results['rgb_fine'] = shadow_maps.view(-1, 3)
-    else:
-        cam_results['rgb_coarse'] = shadow_maps.view(-1, 3)
+        cam_depths_fine = cam_depths_fine.view(batch_size, H, W).to(device)
+        light_depths_fine = light_depths_fine.view(batch_size, H, W).to(device)
+        shadow_maps_fine = inference(ppc, light_ppc, image_shape, batch_size, cam_depths_fine, light_depths_fine)
+        shadow_maps_fine = shadow_maps_fine.view(-1, 3)
+        print("shadow_maps_fines.shape", shadow_maps_fine.shape)
+        cam_results['rgb_fine'] = shadow_maps_coarse
 
     return cam_results

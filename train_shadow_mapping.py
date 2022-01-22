@@ -26,6 +26,9 @@ from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning import LightningModule, Trainer
 from pytorch_lightning.logging import TestTubeLogger
 
+import torch.multiprocessing
+torch.multiprocessing.set_sharing_strategy('file_system')
+
 to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 
 
@@ -47,13 +50,15 @@ class NeRFSystem(LightningModule):
             self.models += [self.nerf_fine]
 
     def decode_batch(self, batch):
-        rays = batch['rays'] # (B, 8)
-        rgbs = batch['rgbs'] # (B, 3)
-        light_rays = batch['light_rays'] # (B, 8)
-        light_ppc = batch['light_ppc'] # (B, 8)
-        ppc = batch['ppc'] # (B, 8)
+        rays = batch['rays'].view(-1, 8) # (B, 8)
+        rgbs = batch['rgbs'].view(-1, 3) # (B, 3)
+        light_rays = batch['light_rays'].view(-1, 8) # (B, 8)
+        light_ppc = batch['light_ppc'] # dict
+        ppc = batch['ppc'] # dict
         c2w = batch['c2w'] # (B, 8)
         print("rays.shape {}, rgb.shape {}".format(rays.shape, rgbs.shape))
+        # print("light_rays: {}, light_ppc: {}".format(light_rays.shape, light_ppc))
+        # print("ppc: {}".format(ppc))
         return rays, rgbs, light_rays, light_ppc, ppc, c2w
 
     def forward(self, rays):
@@ -77,7 +82,9 @@ class NeRFSystem(LightningModule):
                 results[k] += [v]
 
         for k, v in results.items():
+            # print('start', k, v)
             results[k] = torch.cat(v, 0)
+            # print('end', results[k].shape)
         return results
 
     def prepare_data(self):
@@ -142,35 +149,43 @@ class NeRFSystem(LightningModule):
         rays = rays.squeeze() # (H*W,3)
         light_rays = light_rays.squeeze() # (H*W,3)
         rgbs = rgbs.squeeze() # (H*W,3)
-        results = self(rays)
 
-        log = {'val_loss': self.loss(results, rgbs)}
-        typ = 'fine' if 'rgb_fine' in results else 'coarse'
+        cam_results = self(rays)
+        light_results = self(light_rays)
+
+        cam_results = shadow_mapping(cam_results, light_results, rays, 
+                       [ppc], light_ppc, 
+                       image_shape=self.hparams.img_wh, 
+                       batch_size=1, # eval batch size is always 1 
+                       fine_sampling=(self.hparams.N_importance > 0))
+
+        log = {'val_loss': self.loss(cam_results, rgbs)}
+        typ = 'fine' if 'rgb_fine' in cam_results else 'coarse'
     
         if batch_nb == 0:
             print("---------------Evaluating and saving Images!---------------")
             W, H = self.hparams.img_wh
-            img = results[f'rgb_{typ}'].view(H, W, 3).cpu()
+            img = cam_results[f'rgb_{typ}'].view(H, W, 3).cpu()
             rgb8 = to8b(img.numpy())
             gt8 = to8b(rgbs.view(H, W, 3).cpu().numpy())
             img = img.permute(2, 0, 1) # (3, H, W)
             img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
-            depth8 = visualize_depth(results[f'depth_{typ}'].view(H, W), to_tensor=False) 
-            depth = visualize_depth(results[f'depth_{typ}'].view(H, W)) # (3, H, W)
-            if not os.path.exists(f'logs/{self.hparams.exp_name}/imgs'):
-                os.mkdir(f'logs/{self.hparams.exp_name}/imgs')
-            filename = os.path.join(f'logs/{self.hparams.exp_name}/imgs', 'gt_{:03d}.png'.format(self.current_epoch))
+            depth8 = visualize_depth(cam_results[f'depth_{typ}'].view(H, W), to_tensor=False) 
+            depth = visualize_depth(cam_results[f'depth_{typ}'].view(H, W)) # (3, H, W)
+            if not os.path.exists(f'logs_sm/{self.hparams.exp_name}/imgs'):
+                os.mkdir(f'logs_sm/{self.hparams.exp_name}/imgs')
+            filename = os.path.join(f'logs_sm/{self.hparams.exp_name}/imgs', 'gt_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, gt8)
-            filename = os.path.join(f'logs/{self.hparams.exp_name}/imgs', 'rgb_{:03d}.png'.format(self.current_epoch))
+            filename = os.path.join(f'logs_sm/{self.hparams.exp_name}/imgs', 'rgb_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, rgb8)
-            filename = os.path.join(f'logs/{self.hparams.exp_name}/imgs', 'depth_{:03d}.png'.format(self.current_epoch))
+            filename = os.path.join(f'logs_sm/{self.hparams.exp_name}/imgs', 'depth_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, depth8)
 
             stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
             self.logger.experiment.add_images('val/GT_pred_depth',
                                                stack, self.global_step)
 
-        log['val_psnr'] = psnr(results[f'rgb_{typ}'], rgbs)
+        log['val_psnr'] = psnr(cam_results[f'rgb_{typ}'], rgbs)
         return log
 
     def validation_epoch_end(self, outputs):

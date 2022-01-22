@@ -5,7 +5,7 @@ import numpy as np
 import os
 from PIL import Image
 from torchvision import transforms as T
-from camera import Camera
+from models.camera import Camera
 
 from .ray_utils import *
 
@@ -86,20 +86,19 @@ class BlenderDatasetShadows(Dataset):
 
                 #### change it to load the shadow map
                 file_path = frame['file_path'].split('/')
-                file_path[-1] = 'sm_'+ file_path[-1]
-                file_path = '/'.join(file_path)
+                file_path = 'sm_'+ file_path[-1]
                 ################
                 image_path = os.path.join(self.root_dir, f"{file_path}.png")
                 self.image_paths += [image_path]
 
                 img = Image.open(image_path)
-                if self.black_and_white:
-                    img = img.resize(self.img_wh, Image.LANCZOS).convert('L')
-                    img = self.transform(img) # (1, H, W)
-                    img = torch.cat([img, img, img], dim=0) # (3, H, W)
-                else:
-                    img = img.resize(self.img_wh, Image.LANCZOS)
-                    img = self.transform(img) # (4, h, w)
+                # if self.black_and_white:
+                #     img = img.resize(self.img_wh, Image.LANCZOS) #.convert('L')
+                #     img = self.transform(img) # (1, H, W)
+                #     img = torch.cat([img, img, img], dim=0) # (3, H, W)
+                # else:
+                img = img.resize(self.img_wh, Image.LANCZOS)
+                img = self.transform(img) # (4, h, w)
 
                 self.all_rgbs += [img]
 
@@ -111,7 +110,7 @@ class BlenderDatasetShadows(Dataset):
 
     def __len__(self):
         if self.split == 'train':
-            return len(self.all_rays)
+            return len(self.image_paths)
         if self.split == 'val':
             return 8 # only validate 8 images (to support <=8 gpus)
         return len(self.meta['frames'])
@@ -134,20 +133,32 @@ class BlenderDatasetShadows(Dataset):
             img = self.all_rgbs[idx]
             if self.black_and_white: # (3, H, W)
                 img = img.view(3, -1).permute(1, 0) # (h*w, 3) RGBA
-            else: # (4, h, w)
-                img = img.view(4, -1).permute(1, 0) # (h*w, 4) RGBA
-                img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
+            else: # (3, h, w)
+                img = img.view(3, -1).permute(1, 0) # (h*w, 4) RGBA
+                # img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
 
             sample = {'rays': rays, # (h*w,8)
                       'rgbs': img, # (h*w,3)
+                    #   'ppc': [self.all_ppc[idx].eye_pos, self.all_ppc[idx].camera], 
+                    #   'light_ppc': [self.light_ppc.eye_pos, self.light_ppc.camera],
+                      'ppc': {
+                          'eye_pos': self.all_ppc[idx].eye_pos, 
+                          'camera': self.all_ppc[idx].camera,
+                      },
+                      'light_ppc': {
+                          'eye_pos': self.light_ppc.eye_pos, 
+                          'camera': self.light_ppc.camera,
+                      },
+
                       'c2w': pose, # (3,4)
-                      'ppc': self.all_ppc[idx], # (Camera() class)
                       'light_rays': self.light_rays, #(h*w,8)
-                      'light_ppc': self.light_ppc, # (Camera() class)
-}
+                    }
 
         else: # create data for each image separately
             frame = self.meta['frames'][idx]
+            file_path = frame['file_path'].split('/')
+            file_path = 'sm_'+ file_path[-1]
+
             c2w = torch.FloatTensor(frame['transform_matrix'])[:3, :4]
             ###########
             w, h = self.img_wh
@@ -155,33 +166,39 @@ class BlenderDatasetShadows(Dataset):
             ppc = Camera(hfov, (h, w))
             ppc.set_pose_using_blender_matrix(c2w)
             ###########
-            img = Image.open(os.path.join(self.root_dir, f"{frame['file_path']}.png"))
+            img = Image.open(os.path.join(self.root_dir, f"{file_path}.png"))
             if self.black_and_white:
-                img = img.resize(self.img_wh, Image.LANCZOS).convert('L')
+                img = img.resize(self.img_wh, Image.LANCZOS) #.convert('L')
                 img = self.transform(img) # (1, H, W)
                 img = torch.cat([img, img, img], dim=0) # (3, H, W)
                 img = img.view(3, -1).permute(1, 0) # (h*w, 3) RGBA
-                valid_mask = (img[-1]>0).flatten() # (H*W) valid color area
             else:
                 img = img.resize(self.img_wh, Image.LANCZOS)
-                img = self.transform(img) # (4, H, W)
-                valid_mask = (img[-1]>0).flatten() # (H*W) valid color area
-                img = img.view(4, -1).permute(1, 0) # (H*W, 4) RGBA
-                img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
-                
+                img = self.transform(img) # (3, H, W)
+                img = img.view(3, -1).permute(1, 0) # (H*W, 3) RGBA
+                # img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
+
             rays_o, rays_d = get_rays(self.directions, c2w)
 
             rays = torch.cat([rays_o, rays_d, 
                               self.near*torch.ones_like(rays_o[:, :1]),
                               self.far*torch.ones_like(rays_o[:, :1])],
                               1) # (H*W, 8)
+            valid_mask = (img[-1]>0).flatten() # (H*W) valid color area
 
             sample = {'rays': rays,
                       'rgbs': img,
+                      'ppc': {
+                          'eye_pos': ppc.eye_pos, 
+                          'camera': ppc.camera,
+                      },
+                      'light_ppc': {
+                          'eye_pos': self.light_ppc.eye_pos, 
+                          'camera': self.light_ppc.camera,
+                      },
                       'c2w': c2w,
-                      'ppc': ppc,
                       'light_rays': self.light_rays,
-                      'light_ppc': self.light_ppc,
-                      'valid_mask': valid_mask}
+                      'valid_mask': valid_mask
+                      }
 
         return sample

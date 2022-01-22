@@ -55,7 +55,7 @@ def differentiable_w_mapping(res, camera, range_cam, device='cpu', use_numpy_mes
         i, j = torch.meshgrid(pixels_v, pixels_u, indexing='xy')
     transformed_i = i + 0.5
     transformed_j = j + 0.5
-    pixels = torch.stack([transformed_i, transformed_j, torch.ones_like(i)], axis=-1)
+    pixels = torch.stack([transformed_i, transformed_j, torch.ones_like(i, dtype=torch.float)], axis=-1)
     transformed_pixels = pixels[..., None, :] # expand dims 
     transformed_pixels = transformed_pixels.to(device)
     coords = transformed_pixels * camera.camera
@@ -95,6 +95,7 @@ def get_differentiable_projections(w_from_camera, res, from_camera, to_camera, d
     proj = transformed_pixels * R
     proj = torch.sum(proj, -1)
     w_cam_stacked = torch.stack([w_from_camera, w_from_camera, w_from_camera], axis=2)
+    # print("w_cam: ", w_cam_stacked.shape, proj.shape, Q.shape)
     coords = w_cam_stacked * proj + Q
     ul, vl, wl = torch.unbind(coords, dim=2)
     ul = torch.div(ul,wl)

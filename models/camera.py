@@ -3,7 +3,7 @@ import torch
 
 
 class Camera():
-    def __init__(self, hfov, res, ):
+    def __init__(self, hfov, res):
         """
         Defines a PPC (camera) that we will be using to model the world and light. 
         """
@@ -31,6 +31,14 @@ class Camera():
 
     def get_c(self,):
         return self.camera[:,2]
+
+    @classmethod
+    def from_camera_eyepos(cls, eye_pos, camera):
+        c_ = cls(30, (400,400))
+        c_.res = None
+        c_.camera = camera 
+        c_.eye_pos = eye_pos
+        return c_ 
         
     @staticmethod
     def c2w_from_lookat(eye_pos, look_at_point, up_guidance=np.array([0, 1, 0], dtype=np.float32)):
@@ -53,11 +61,11 @@ class Camera():
 
     def set_pose_using_blender_matrix(self, c2w):
         """
-        c2w: [3,4] doesn't know what the resolution of the image is (has the extrinsic parameters)
+        c2w: (type tensor) [3,4] doesn't know what the resolution of the image is (has the extrinsic parameters)
         pixels = K @ c2w @ p -> ppc @ p 
         """
-        self.eye_pos = torch.tensor(c2w[:, 3]).float() # Camera location 
-        self.camera = torch.tensor(c2w[:, :3]).float() @ self.camera.float() 
+        self.eye_pos = c2w[:, 3].float() # Camera location 
+        self.camera = c2w[:, :3].float() @ self.camera.float() 
 
     def set_camera_matrix(self, eye_pos, lookAtPoint, upGuidance):
         """
@@ -97,6 +105,7 @@ class Camera():
         O_minus_L = self.eye_pos - to_camera.eye_pos
         O_minus_L = O_minus_L.to(device)
         ML_inv = torch.inverse(to_camera.camera)
+        print("get_transformation_to ML, O_minus_L", ML_inv.shape, O_minus_L.shape)
         Q = ML_inv @ O_minus_L
         R = ML_inv @ self.camera
         return R, Q #[R, Q]
