@@ -81,8 +81,14 @@ def get_opts():
     parser.add_argument('--num_sanity_val_steps', default=1, type=int,
                         help='Converts all images to black and white images.')
 
-    parser.add_argument('--Light_N_importance', type=int, default=-1,
+    parser.add_argument('--Light_N_importance', type=int, default=0,
                         help='number of additional fine samples')
+                        
+    parser.add_argument('--sample_light_depth_every', default=5, type=int,
+                        help='sample_light_depth_every batch of rays.')
+
+    parser.add_argument('--grad_on_light', default=False, action="store_true",
+                        help='Calculate gradient on Light. If you set this to true, we will sample light depth every batch!')
 
 
     return parser.parse_args()

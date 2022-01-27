@@ -43,6 +43,10 @@ class NeRFSystem(LightningModule):
         self.embedding_xyz = Embedding(3, 10) # 10 is the default number
         self.embedding_dir = Embedding(3, 4) # 4 is the default number
         self.embeddings = [self.embedding_xyz, self.embedding_dir]
+        self.current_light_depth_cnt = 0
+        if self.hparams.grad_on_light:
+                print("Calculating gradient on light, we will calculate the light depth map every iteration.")
+                self.hparams.sample_light_depth_every = 1
 
         self.nerf_coarse = NeRF()
         self.models = [self.nerf_coarse]
@@ -135,28 +139,30 @@ class NeRFSystem(LightningModule):
         cam_results = self(rays, N_importance=self.hparams.N_importance)
         rays = None
 
-        # every now and then compute the gradients on light too 
-        # used to make it faster 
-        COMPUTE_LIGHT_GRADIENTS = False
-        prob = 0.7
-        # if COMPUTE_LIGHT_GRADIENTS and np.random.uniform() > prob: 
-        #     print("Calulating Gradients on light too (might cause an overflow so please set to False)")
-        #     light_results = self(self.light_rays.to(rgbs.device))
-        #     light_results['opacity_coarse'] = None
-        #     light_results['opacity_fine'] = None        
-        # else:
-        with torch.no_grad():
+        if self.current_light_depth_cnt % self.hparams.sample_light_depth_every == 0:
+            print("Updating Light's Depth Map at {}".format(self.current_light_depth_cnt))
+            self.current_light_depth_cnt = 1
             if self.hparams.Light_N_importance == -1:
-                Light_N_importance = int(np.random.choice([0,8,16,32]))        
+                self.curr_Light_N_importance = int(np.random.choice([0,8,16,32]))        
             else:
-                Light_N_importance = self.hparams.Light_N_importance
-            # maybe only use coarse depth for light? no need for fine? 
-            light_results = self(self.light_rays.to(rgbs.device), 
-                            N_importance=Light_N_importance, 
-                            were_gradients_computed=False)
-            light_results['opacity_coarse'] = None
-            light_results['opacity_fine'] = None
-        light_rays = None
+                self.curr_Light_N_importance = self.hparams.Light_N_importance
+
+            if self.hparams.grad_on_light:
+                print("Using Gradients on Light") 
+                self.curr_light_results = self(self.light_rays.to(rgbs.device), 
+                                N_importance=self.curr_Light_N_importance, 
+                                were_gradients_computed=False)
+            else:
+                with torch.no_grad():
+                    # maybe only use coarse depth for light? no need for fine? 
+                    self.curr_light_results = self(self.light_rays.to(rgbs.device), 
+                                    N_importance=self.curr_Light_N_importance, 
+                                    were_gradients_computed=False)
+                    self.curr_light_results['opacity_coarse'] = None
+                    self.curr_light_results['opacity_fine'] = None
+        else:
+            self.current_light_depth_cnt += 1 
+
 
         if self.hparams.batch_size == 1: 
             ppc = [ppc]
@@ -164,11 +170,15 @@ class NeRFSystem(LightningModule):
         # print("self.light_rays", self.light_rays.shape)  #
         # print("self.light_pixels", self.light_pixels.shape, light_pixels.shape)
         cam_results = efficient_sm(cam_pixels, self.light_pixels.to(rgbs.device),
-                        cam_results, light_results, 
+                        cam_results, self.curr_light_results, 
                         ppc, self.light_ppc, 
                         image_shape=self.hparams.img_wh,  
                         fine_sampling=(self.hparams.N_importance > 0), 
-                        Light_N_importance=(Light_N_importance>0))
+                        Light_N_importance=(self.curr_Light_N_importance>0))
+
+        # if (self.current_light_depth_cnt % self.hparams.sample_light_depth_every == 0) and (cam_results['rgb_coarse'].shape[0] > 5):
+        #     print(shadow_maps_coarse[:5,:]) # only print the first elements 
+
 
         log['train/loss'] = loss = self.loss(cam_results, rgbs)
         typ = 'fine' if 'rgb_fine' in cam_results else 'coarse'
@@ -276,3 +286,8 @@ if __name__ == '__main__':
                       auto_scale_batch_size=False)
 
     trainer.fit(system)
+
+
+
+
+# python train_efficient_sm.py --dataset_name efficient_sm --root_dir ../../datasets/volumetric/results_500_light_inside_bounding_vol_v1/ --N_importance 64 --N_samples 64 --num_gpus 0 --img_wh 64 64 --noise_std 0 --num_epochs 200 --batch_size 1024 --optimizer adam --lr 0.00001 --exp_name no_grad_light_64_64_64_test --num_sanity_val_steps 0 --grad_on_light --Light_N_importance 0

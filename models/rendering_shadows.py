@@ -306,7 +306,7 @@ def shadow_mapping(cam_results, light_results, rays, ppc, light_ppc, image_shape
                                                         cam, light_cam, 
                                                         cam_depths.squeeze(0), light_depths.squeeze(0),
                                                         device=cam_depths.device, 
-                                                        mode='shadow_method_1',
+                                                        mode='shadow_method_2',
                                                         delta=1e-2, epsilon=0.0, new_min=0.0, new_max=1.0, 
                                                         sigmoid=False, use_numpy_meshgrid=True)
             shadow_maps += [sm]
@@ -444,7 +444,6 @@ def efficient_sm(cam_pixels, light_pixels, cam_results, light_results,
         batched_mesh_range_cam_fine = torch.cat([cam_pixels, cam_depths_fine.view(-1,1)], dim=1)
         
         if Light_N_importance: 
-            print("Using Light N_Importance Sampling!")
             light_depths_fine = light_results['depth_fine'] # (N_rays)
             mesh_range_light = torch.cat([light_pixels, light_depths_fine.view(-1,1)], dim=1)
             meshed_normed_light_fine = eff_sm.get_normed_w(light_camera, mesh_range_light, device=light_depths_fine.device)
@@ -457,7 +456,5 @@ def efficient_sm(cam_pixels, light_pixels, cam_results, light_results,
         shadow_maps_fine = shadow_maps_fine.view(-1, 3)
         cam_results['rgb_fine'] = shadow_maps_fine + EPSILON * torch.ones_like(shadow_maps_coarse)
 
-    if cam_pixels.shape[0] > 5:
-        print(shadow_maps_coarse[:5,:]) # only print the first elements 
 
     return cam_results
