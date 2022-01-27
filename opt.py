@@ -7,7 +7,7 @@ def get_opts():
                         default='/home/ubuntu/data/nerf_example_data/nerf_synthetic/lego',
                         help='root directory of dataset')
     parser.add_argument('--dataset_name', type=str, default='blender',
-                        choices=['blender', 'llff', "pyredner", 'shadows'],
+                        choices=['blender', 'llff', "pyredner", 'shadows', 'efficient_sm'],
                         help='which dataset to train/val')
     parser.add_argument('--img_wh', nargs="+", type=int, default=[128, 128],
                         help='resolution (img_w, img_h) of the image')
@@ -80,6 +80,9 @@ def get_opts():
 
     parser.add_argument('--num_sanity_val_steps', default=1, type=int,
                         help='Converts all images to black and white images.')
+
+    parser.add_argument('--Light_N_importance', type=int, default=-1,
+                        help='number of additional fine samples')
 
 
     return parser.parse_args()

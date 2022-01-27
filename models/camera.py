@@ -102,10 +102,10 @@ class Camera():
         returns R,Q matrix for transformation from self to camera
         to_camera: expects the camera class; eg. light presp.
         """
-        O_minus_L = self.eye_pos - to_camera.eye_pos
+        O_minus_L = self.eye_pos.to(device) - to_camera.eye_pos.to(device)
         O_minus_L = O_minus_L.to(device)
-        ML_inv = torch.inverse(to_camera.camera)
-        print("get_transformation_to ML, O_minus_L", ML_inv.shape, O_minus_L.shape)
+        ML_inv = torch.inverse(to_camera.camera).to(device)
+        # print("get_transformation_to ML, O_minus_L", ML_inv.shape, O_minus_L.shape)
         Q = ML_inv @ O_minus_L
-        R = ML_inv @ self.camera
+        R = ML_inv @ self.camera.to(device)
         return R, Q #[R, Q]

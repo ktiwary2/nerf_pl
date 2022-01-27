@@ -10,7 +10,7 @@ from datasets import dataset_dict
 
 # models
 from models.nerf import Embedding, NeRF
-from models.rendering_shadows import render_rays, shadow_mapping
+from models.rendering_shadows import render_rays, efficient_sm
 
 # optimizer, scheduler, visualization
 from utils import *
@@ -31,6 +31,7 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 
+torch.autograd.set_detect_anomaly(True)
 
 class NeRFSystem(LightningModule):
     def __init__(self, hparams):
@@ -52,16 +53,18 @@ class NeRFSystem(LightningModule):
     def decode_batch(self, batch):
         rays = batch['rays'].view(-1, 8) # (B, 8)
         rgbs = batch['rgbs'].view(-1, 3) # (B, 3)
+        cam_pixels = batch['pixels'].view(-1,3)
         light_rays = batch['light_rays'].view(-1, 8) # (B, 8)
         light_ppc = batch['light_ppc'] # dict
+        light_pixels = batch['light_pixels'].view(-1,3)
+
         ppc = batch['ppc'] # dict
-        c2w = batch['c2w'] # (B, 8)
-        print("rays.shape {}, rgb.shape {}".format(rays.shape, rgbs.shape))
+        # print("rays.shape {}, rgb.shape {}".format(rays.shape, rgbs.shape))
         # print("light_rays: {}, light_ppc: {}".format(light_rays.shape, light_ppc))
         # print("ppc: {}".format(ppc))
-        return rays, rgbs, light_rays, light_ppc, ppc, c2w
+        return rays, rgbs, cam_pixels, light_rays, light_pixels, light_ppc, ppc
 
-    def forward(self, rays):
+    def forward(self, rays, N_importance, were_gradients_computed=True):
         """Do batched inference on rays using chunk."""
         B = rays.shape[0]
         results = defaultdict(list)
@@ -74,9 +77,10 @@ class NeRFSystem(LightningModule):
                             self.hparams.use_disp,
                             self.hparams.perturb,
                             self.hparams.noise_std,
-                            self.hparams.N_importance,
-                            self.hparams.chunk, # chunk size is effective in val mode
-                            self.train_dataset.white_back)
+                            N_importance=N_importance,
+                            chunk=self.hparams.chunk, # chunk size is effective in val mode
+                            white_back = self.train_dataset.white_back, 
+                            were_gradients_computed=were_gradients_computed)
 
             for k, v in rendered_ray_chunks.items():
                 results[k] += [v]
@@ -88,16 +92,19 @@ class NeRFSystem(LightningModule):
         return results
 
     def prepare_data(self):
-        dataset = dataset_dict[self.hparams.dataset_name]
+        print("Using efficient_sm shadow DataLoader (hardcoded)")
+        # dataset = dataset_dict[self.hparams.dataset_name]
+        dataset = dataset_dict['efficient_sm']
         kwargs = {'root_dir': self.hparams.root_dir,
                   'img_wh': tuple(self.hparams.img_wh), 
                   'hparams': self.hparams
                   }
-        if self.hparams.dataset_name == 'llff':
-            kwargs['spheric_poses'] = self.hparams.spheric_poses
-            kwargs['val_num'] = self.hparams.num_gpus
         self.train_dataset = dataset(split='train', **kwargs)
         self.val_dataset = dataset(split='val', **kwargs)
+        ##### Set these since they are constant
+        self.light_rays = self.train_dataset.light_rays
+        self.light_pixels = self.train_dataset.light_pixels.view(-1,3)
+        self.light_ppc = self.train_dataset.light_ppc
 
     def configure_optimizers(self):
         self.optimizer = get_optimizer(self.hparams, self.models)
@@ -119,25 +126,49 @@ class NeRFSystem(LightningModule):
                           batch_size=1, # validate one image (H*W rays) at a time
                           pin_memory=True)
     
+    # def get_light_depth_map(self, light_pixels, light_rays):
+
+
     def training_step(self, batch, batch_nb):
         log = {'lr': get_learning_rate(self.optimizer)}
-        rays, rgbs, light_rays, light_ppc, ppc, c2w = self.decode_batch(batch)
-        cam_results = self(rays)
-        ray_shape = rays.shape
+        rays, rgbs, cam_pixels, _, _, _, ppc = self.decode_batch(batch)
+        cam_results = self(rays, N_importance=self.hparams.N_importance)
         rays = None
-        light_results = self(light_rays)
-        light_rays = None
 
-        rays = torch.ones(ray_shape)
+        # every now and then compute the gradients on light too 
+        # used to make it faster 
+        COMPUTE_LIGHT_GRADIENTS = False
+        prob = 0.7
+        # if COMPUTE_LIGHT_GRADIENTS and np.random.uniform() > prob: 
+        #     print("Calulating Gradients on light too (might cause an overflow so please set to False)")
+        #     light_results = self(self.light_rays.to(rgbs.device))
+        #     light_results['opacity_coarse'] = None
+        #     light_results['opacity_fine'] = None        
+        # else:
+        with torch.no_grad():
+            if self.hparams.Light_N_importance == -1:
+                Light_N_importance = int(np.random.choice([0,8,16,32]))        
+            else:
+                Light_N_importance = self.hparams.Light_N_importance
+            # maybe only use coarse depth for light? no need for fine? 
+            light_results = self(self.light_rays.to(rgbs.device), 
+                            N_importance=Light_N_importance, 
+                            were_gradients_computed=False)
+            light_results['opacity_coarse'] = None
+            light_results['opacity_fine'] = None
+        light_rays = None
 
         if self.hparams.batch_size == 1: 
             ppc = [ppc]
-
-        cam_results = shadow_mapping(cam_results, light_results, rays, 
-                       ppc, light_ppc, 
-                       image_shape=self.hparams.img_wh, 
-                       batch_size=self.hparams.batch_size, 
-                       fine_sampling=(self.hparams.N_importance > 0))
+            
+        # print("self.light_rays", self.light_rays.shape)  #
+        # print("self.light_pixels", self.light_pixels.shape, light_pixels.shape)
+        cam_results = efficient_sm(cam_pixels, self.light_pixels.to(rgbs.device),
+                        cam_results, light_results, 
+                        ppc, self.light_ppc, 
+                        image_shape=self.hparams.img_wh,  
+                        fine_sampling=(self.hparams.N_importance > 0), 
+                        Light_N_importance=(Light_N_importance>0))
 
         log['train/loss'] = loss = self.loss(cam_results, rgbs)
         typ = 'fine' if 'rgb_fine' in cam_results else 'coarse'
@@ -152,20 +183,27 @@ class NeRFSystem(LightningModule):
                }
 
     def validation_step(self, batch, batch_nb):
-        print("---------------Starting Validation---------------")
-        rays, rgbs, light_rays, light_ppc, ppc, c2w = self.decode_batch(batch)
+        # print("---------------Starting Validation---------------")
+        rays, rgbs, cam_pixels, light_rays, light_pixels, light_ppc, ppc = self.decode_batch(batch)
         rays = rays.squeeze() # (H*W,3)
         light_rays = light_rays.squeeze() # (H*W,3)
         rgbs = rgbs.squeeze() # (H*W,3)
 
-        cam_results = self(rays)
-        light_results = self(light_rays)
+        with torch.no_grad():
+            cam_results = self(rays, N_importance=self.hparams.N_importance)
+            rays = None
+            light_results = self(light_rays, N_importance=self.hparams.N_importance, 
+                                 were_gradients_computed=False)
+            light_rays = None
+            # ppc = [ppc]
+            # light_ppc = [light_ppc]
 
-        cam_results = shadow_mapping(cam_results, light_results, rays, 
-                       [ppc], light_ppc, 
-                       image_shape=self.hparams.img_wh, 
-                       batch_size=1, # eval batch size is always 1 
-                       fine_sampling=(self.hparams.N_importance > 0))
+            cam_results = efficient_sm(cam_pixels, self.light_pixels.to(rgbs.device),
+                        cam_results, light_results, 
+                        ppc, self.light_ppc, 
+                        image_shape=self.hparams.img_wh,  
+                        fine_sampling=(self.hparams.N_importance > 0), 
+                        Light_N_importance=(self.hparams.N_importance > 0))
 
         log = {'val_loss': self.loss(cam_results, rgbs)}
         typ = 'fine' if 'rgb_fine' in cam_results else 'coarse'
@@ -180,13 +218,13 @@ class NeRFSystem(LightningModule):
             img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
             depth8 = visualize_depth(cam_results[f'depth_{typ}'].view(H, W), to_tensor=False) 
             depth = visualize_depth(cam_results[f'depth_{typ}'].view(H, W)) # (3, H, W)
-            if not os.path.exists(f'logs_sm/{self.hparams.exp_name}/imgs'):
-                os.mkdir(f'logs_sm/{self.hparams.exp_name}/imgs')
-            filename = os.path.join(f'logs_sm/{self.hparams.exp_name}/imgs', 'gt_{:03d}.png'.format(self.current_epoch))
+            if not os.path.exists(f'eff_sm/logs/{self.hparams.exp_name}/imgs'):
+                os.mkdir(f'eff_sm/logs/{self.hparams.exp_name}/imgs')
+            filename = os.path.join(f'eff_sm/logs/{self.hparams.exp_name}/imgs', 'gt_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, gt8)
-            filename = os.path.join(f'logs_sm/{self.hparams.exp_name}/imgs', 'rgb_{:03d}.png'.format(self.current_epoch))
+            filename = os.path.join(f'eff_sm/logs/{self.hparams.exp_name}/imgs', 'rgb_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, rgb8)
-            filename = os.path.join(f'logs_sm/{self.hparams.exp_name}/imgs', 'depth_{:03d}.png'.format(self.current_epoch))
+            filename = os.path.join(f'eff_sm/logs/{self.hparams.exp_name}/imgs', 'depth_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, depth8)
 
             stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
@@ -210,14 +248,14 @@ class NeRFSystem(LightningModule):
 if __name__ == '__main__':
     hparams = get_opts()
     system = NeRFSystem(hparams)
-    checkpoint_callback = ModelCheckpoint(filepath=os.path.join(f'ckpts_sm/{hparams.exp_name}',
+    checkpoint_callback = ModelCheckpoint(filepath=os.path.join(f'eff_sm/ckpts/{hparams.exp_name}',
                                                                 '{epoch:d}'),
                                           monitor='val/loss',
                                           mode='min',
                                           save_top_k=5,)
 
     logger = TestTubeLogger(
-        save_dir="logs_sm",
+        save_dir="eff_sm/logs",
         name=hparams.exp_name,
         debug=False,
         create_git_tag=False

@@ -1,9 +1,10 @@
 import torch
 from torchsearchsorted import searchsorted
 import models.shadow_mapping_utils as shadow_mapping_utils
+import models.efficient_shadow_mapping as eff_sm
 from models.camera import Camera
 
-__all__ = ['render_rays']
+__all__ = ['render_rays', 'shadow_mapping', 'efficient_sm']
 
 """
 Function dependencies: (-> means function calls)
@@ -27,7 +28,7 @@ def sample_pdf(rays, weights, N_importance, det=False, eps=1e-5):
     Outputs:
         samples: the sampled samples
     """
-    torch.cuda.empty_cache()
+    # torch.cuda.empty_cache()
     N_rays, N_samples_ = weights.shape
     weights = weights + eps # prevent division by zero (don't do inplace op!)
     pdf = weights / torch.sum(weights, -1, keepdim=True) # (N_rays, N_samples_)
@@ -36,8 +37,8 @@ def sample_pdf(rays, weights, N_importance, det=False, eps=1e-5):
                                                                # padded to 0~1 inclusive
                                                                
     u = torch.rand(N_rays, N_importance, device=rays.device) # (N_rays, N_samples)
-    inds = searchsorted(cdf, u, side='right').float() - 1.0 # (N_rays, N_samples)
-    # inds = torch.searchsorted(cdf, u, right=True).float() - 1.0  # (B, Kf)
+    # inds = searchsorted(cdf, u, side='right').float() - 1.0 # (N_rays, N_samples)
+    inds = torch.searchsorted(cdf, u, right=True).float() - 1.0  # (B, Kf)
     inds = torch.clamp_min(inds, 0.0)
 
     z_steps = (inds + torch.rand_like(inds)) / N_samples_  # (B, Kf)
@@ -49,38 +50,46 @@ def sample_pdf(rays, weights, N_importance, det=False, eps=1e-5):
         # z_samp = 1 / (1 / near * (1 - z_steps) + 1 / far * z_steps)  # (B, Kf)
     return z_samp
 
+# def sample_pdf(bins, weights, N_importance, det=False, eps=1e-5):
+#     """
+#     Sample @N_importance samples from @bins with distribution defined by @weights.
+#     Inputs:
+#         bins: (N_rays, N_samples_+1) where N_samples_ is "the number of coarse samples per ray - 2"
+#         weights: (N_rays, N_samples_)
+#         N_importance: the number of samples to draw from the distribution
+#         det: deterministic or not
+#         eps: a small number to prevent division by zero
+#     Outputs:
+#         samples: the sampled samples
+#     """
+#     N_rays, N_samples_ = weights.shape
+#     weights = weights + eps # prevent division by zero (don't do inplace op!)
+#     pdf = weights / torch.sum(weights, -1, keepdim=True) # (N_rays, N_samples_)
+#     cdf = torch.cumsum(pdf, -1) # (N_rays, N_samples), cumulative distribution function
+#     cdf = torch.cat([torch.zeros_like(cdf[: ,:1]), cdf], -1)  # (N_rays, N_samples_+1) 
+#                                                                # padded to 0~1 inclusive
 
-    # if det:
-    #     u = torch.linspace(0, 1, N_importance, device=bins.device)
-    #     u = u.expand(N_rays, N_importance)
-    # else:
-        
-    # u = u.contiguous()
+#     if det:
+#         u = torch.linspace(0, 1, N_importance, device=bins.device)
+#         u = u.expand(N_rays, N_importance)
+#     else:
+#         u = torch.rand(N_rays, N_importance, device=bins.device)
+#     u = u.contiguous()
 
-    # inds = searchsorted(cdf, u, side='right')
-    # below = torch.clamp_min(inds-1, 0)
-    # above = torch.clamp_max(inds, N_samples_)
+#     inds = searchsorted(cdf, u, side='right')
+#     below = torch.clamp_min(inds-1, 0)
+#     above = torch.clamp_max(inds, N_samples_)
 
-    # inds_sampled = torch.stack([below, above], -1).view(N_rays, 2*N_importance)
-    # print("inds_sampled", inds_sampled)
-    # print(inds_sampled.shape)
-    # print("cdf", cdf)
-    # print(cdf.shape)
-    # print("gather", torch.gather(cdf, 1, inds_sampled))
-    # print("gather", torch.gather(cdf, 1, inds_sampled).shape)
-    # cdf_g = torch.gather(cdf, 1, inds_sampled).view(N_rays, N_importance, 2)
-    # bins_g = torch.gather(bins, 1, inds_sampled).view(N_rays, N_importance, 2)
+#     inds_sampled = torch.stack([below, above], -1).view(N_rays, 2*N_importance)
+#     cdf_g = torch.gather(cdf, 1, inds_sampled).view(N_rays, N_importance, 2)
+#     bins_g = torch.gather(bins, 1, inds_sampled).view(N_rays, N_importance, 2)
 
-    # denom = cdf_g[...,1]-cdf_g[...,0]
-    # print("denom.shape", denom.shape)
-    # print("cdf_g",cdf_g)
-    # print(cdf_g.shape)
-    # print("denom", denom)
-    # denom[denom<eps] = 1 # denom equals 0 means a bin has weight 0, in which case it will not be sampled
-    #                      # anyway, therefore any value for it is fine (set to 1 here)
+#     denom = cdf_g[...,1]-cdf_g[...,0]
+#     denom[denom<eps] = 1 # denom equals 0 means a bin has weight 0, in which case it will not be sampled
+#                          # anyway, therefore any value for it is fine (set to 1 here)
 
-    # samples = bins_g[...,0] + (u-cdf_g[...,0])/denom * (bins_g[...,1]-bins_g[...,0])
-    # return samples
+#     samples = bins_g[...,0] + (u-cdf_g[...,0])/denom * (bins_g[...,1]-bins_g[...,0])
+#     return samples
 
 def render_rays(models,
                 embeddings,
@@ -93,6 +102,7 @@ def render_rays(models,
                 chunk=1024*32,
                 white_back=False,
                 test_time=False, 
+                were_gradients_computed= True
                 ):
     """
     Render rays by computing the output of @model applied on @rays
@@ -245,7 +255,9 @@ def render_rays(models,
     if N_importance > 0: # sample points for fine model
         # z_vals_mid = 0.5 * (z_vals[: ,:-1] + z_vals[: ,1:]) # (N_rays, N_samples-1) interval mid points
         z_vals_ = sample_pdf(rays, weights_coarse[:, 1:-1],
-                             N_importance, det=(perturb==0)).detach()
+                             N_importance, det=(perturb==0))
+        # if were_gradients_computed: 
+        z_vals_ = z_vals_.detach()
                   # detach so that grad doesn't propogate to weights_coarse from here
 
         z_vals, _ = torch.sort(torch.cat([z_vals, z_vals_], -1), -1)
@@ -290,7 +302,7 @@ def shadow_mapping(cam_results, light_results, rays, ppc, light_ppc, image_shape
             cam = Camera.from_camera_eyepos(eye_pos=ppc[i]['eye_pos'].squeeze(0), camera=ppc[i]['camera'].squeeze(0))
             # eye_pos, camera = light_ppc[0], light_ppc[1]
             light_cam = Camera.from_camera_eyepos(eye_pos=light_ppc['eye_pos'].squeeze(0), camera=light_ppc['camera'].squeeze(0))
-            sm = shadow_mapping_utils.run_shadow_mapping(image_shape,
+            sm = eff_sm.run_shadow_mapping(image_shape,
                                                         cam, light_cam, 
                                                         cam_depths.squeeze(0), light_depths.squeeze(0),
                                                         device=cam_depths.device, 
@@ -316,7 +328,7 @@ def shadow_mapping(cam_results, light_results, rays, ppc, light_ppc, image_shape
     light_depths_coarse = light_depths_coarse.view(batch_size, H, W).to(device)
     shadow_maps_coarse = inference(ppc, light_ppc, image_shape, batch_size, cam_depths_coarse, light_depths_coarse)
     shadow_maps_coarse = shadow_maps_coarse.view(-1, 3)
-    print("shadow_maps_coarse.shape", shadow_maps_coarse.shape)
+    # print("shadow_maps_coarse.shape", shadow_maps_coarse.shape)
 
     cam_results['rgb_coarse'] = shadow_maps_coarse
 
@@ -332,7 +344,120 @@ def shadow_mapping(cam_results, light_results, rays, ppc, light_ppc, image_shape
         light_depths_fine = light_depths_fine.view(batch_size, H, W).to(device)
         shadow_maps_fine = inference(ppc, light_ppc, image_shape, batch_size, cam_depths_fine, light_depths_fine)
         shadow_maps_fine = shadow_maps_fine.view(-1, 3)
-        print("shadow_maps_fines.shape", shadow_maps_fine.shape)
+        # print("shadow_maps_fines.shape", shadow_maps_fine.shape)
         cam_results['rgb_fine'] = shadow_maps_coarse
+
+    return cam_results
+
+######
+# Sometimes loss goes to NaN :(
+EPSILON = 1e-5
+######
+def efficient_sm(cam_pixels, light_pixels, cam_results, light_results, 
+                 ppc, light_ppc, image_shape, fine_sampling, Light_N_importance): 
+    """
+    cam_pixels: [i,j,1]
+    light_pixels: [i,j,1]
+    cam_result: result dictionary with `depth_*`, `opacity_*`
+    light_result: result dictionary with `depth_*`, `opacity_*`
+    rays: generated rays 
+    ppc: [Batch_size] Camera Poses: instance of the Camera() class
+    light_ppc: [1] Pose of the Camera at Light position 
+    batch_size: batch_size
+    fine_sampling: set fine_sampling
+    image_shape: IMAGE SHAPE OF THE CAMERA AT LIGHT POSITION 
+    """
+
+    def inference(ppc, light_camera, image_shape, batched_mesh_range_cam, meshed_normed_light_cam):
+        """
+        ppc: [Batch_size] Camera Poses: instance of the Camera() class
+        light_camera: Instance of class Camera placed at the light position 
+        batch_size: batch_size
+        batched_mesh_range_cam: [num_rays, 4] (i, j, 1, depth] from camera viewpoints
+        meshed_normed_light_cam: [H*W, 4] (i, j, 1, depth] from light viewpoint
+        """
+        # shadow_maps = []
+        # print(ppc)
+        # print(type(ppc))
+        # curr_eye_pos = ppc['eye_pos'][0]
+        # prev_split_at = 0
+        curr_ppc = Camera.from_camera_eyepos(eye_pos=ppc['eye_pos'][0].squeeze(0), camera=ppc['camera'][0].squeeze(0))
+
+        # for i in range(len(ppc)):
+        #     # each pixel can have a different viewpoint within the batch, therefore we need to split them with the same (depth, pose) 
+        #     if not (torch.equal(curr_eye_pos, ppc['eye_pos'][i])): 
+        #         # means a new ppc is encountered 
+        #         # all pixels from prev_split to i have the same camera pose therefore we can estimate the sm 
+        #         # for those.
+        #         sub_batch_mesh_range_cam = batched_mesh_range_cam[prev_split_at:i,:]
+        #         sm = eff_sm.run_shadow_mapping(image_shape, curr_ppc, light_camera, sub_batch_mesh_range_cam, 
+        #                                    meshed_normed_light_cam, sub_batch_mesh_range_cam.device, mode='shadow_method_2', \
+        #                                    delta=1e-2, epsilon=0.0, new_min=0.0, new_max=1.0, sigmoid=False, 
+        #                                    use_numpy_meshgrid=True)
+        #         shadow_maps += [sm]
+        #         prev_split_at = i 
+        #         curr_eye_pos = ppc['eye_pos'][i]
+        #         curr_ppc = Camera.from_camera_eyepos(eye_pos=ppc['eye_pos'][i].squeeze(0), camera=ppc['camera'][i].squeeze(0))
+
+        # if prev_split_at == 0: 
+            # means that all the pixels have the same viewpoint! we can batch them together
+        shadow_maps = eff_sm.run_shadow_mapping(image_shape, curr_ppc, light_camera, batched_mesh_range_cam, 
+                                        meshed_normed_light_cam, batched_mesh_range_cam.device, mode='shadow_method_1', \
+                                        delta=1e-2, epsilon=0.0, new_min=0.0, new_max=1.0, sigmoid=False, 
+                                        use_numpy_meshgrid=True) # (num_rays, 3)
+        # else: 
+        #     shadow_maps = torch.cat(shadow_maps, 0) # (num_rays, 3)
+        return shadow_maps # (num_rays)
+
+    # should be the same for all the pixels! 
+    # print(light_ppc)
+    # print(type(light_ppc))
+    # light_camera = Camera.from_camera_eyepos(eye_pos=light_ppc['eye_pos'].squeeze(0), camera=light_ppc['camera'].squeeze(0))
+    light_camera = light_ppc
+    if True: 
+        # Do Shadow Mapping for Coarse Depth 
+        cam_depths_coarse = cam_results['depth_coarse'] # (N_rays)
+        cam_pixels = cam_pixels.to(cam_depths_coarse.device)
+        batched_mesh_range_cam_coarse = torch.cat([cam_pixels, cam_depths_coarse.view(-1,1)], dim=1)
+        # print(batched_mesh_range_cam_coarse)
+        # assert N_rays == cam_depths_coarse.shape[0]
+        # assert N_rays == light_depths_coarse.shape[0]
+
+        light_depths_coarse = light_results['depth_coarse'] # (H*W)
+        # This is not Batched, we do full inference on the light! 
+        light_pixels = light_pixels.to(light_depths_coarse.device)
+        mesh_range_light = torch.cat([light_pixels, light_depths_coarse.view(-1,1)], dim=1)
+        # print(mesh_range_light.shape, mesh_range_light)
+        meshed_normed_light_coarse = eff_sm.get_normed_w(light_camera, mesh_range_light, device=light_depths_coarse.device)
+        # print("meshed_normed_light_coarse.shape", meshed_normed_light_coarse.shape)
+
+        shadow_maps_coarse = inference(ppc, light_camera, image_shape, batched_mesh_range_cam_coarse, meshed_normed_light_coarse)
+        # print("shadow_maps_coarse.shape", shadow_maps_coarse.shape)
+        shadow_maps_coarse = shadow_maps_coarse.view(-1, 3)
+
+        cam_results['rgb_coarse'] = shadow_maps_coarse + EPSILON * torch.ones_like(shadow_maps_coarse) 
+
+    # Do Shadow Mapping for Fine Depth Maps 
+    FINE = True
+    if fine_sampling and FINE: # sample points for fine model
+        cam_depths_fine = cam_results['depth_fine'] # (N_rays)
+        batched_mesh_range_cam_fine = torch.cat([cam_pixels, cam_depths_fine.view(-1,1)], dim=1)
+        
+        if Light_N_importance: 
+            print("Using Light N_Importance Sampling!")
+            light_depths_fine = light_results['depth_fine'] # (N_rays)
+            mesh_range_light = torch.cat([light_pixels, light_depths_fine.view(-1,1)], dim=1)
+            meshed_normed_light_fine = eff_sm.get_normed_w(light_camera, mesh_range_light, device=light_depths_fine.device)
+
+            shadow_maps_fine = inference(ppc, light_camera, image_shape, batched_mesh_range_cam_fine, meshed_normed_light_fine)
+        else:
+            shadow_maps_fine = inference(ppc, light_camera, image_shape, batched_mesh_range_cam_fine, meshed_normed_light_coarse)
+
+        # print("shadow_maps_fine.shape", shadow_maps_fine.shape)
+        shadow_maps_fine = shadow_maps_fine.view(-1, 3)
+        cam_results['rgb_fine'] = shadow_maps_fine + EPSILON * torch.ones_like(shadow_maps_coarse)
+
+    if cam_pixels.shape[0] > 5:
+        print(shadow_maps_coarse[:5,:]) # only print the first elements 
 
     return cam_results
