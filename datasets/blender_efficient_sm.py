@@ -182,6 +182,9 @@ class BlenderEfficientShadows(Dataset):
             hfov = self.meta['camera_angle_x'] * 180./np.pi
             ppc = Camera(hfov, (h, w))
             ppc.set_pose_using_blender_matrix(c2w)
+            eye_poses = [ppc.eye_pos]*h*w
+            cameras = [ppc.camera]*h*w
+
             ###########
             img = Image.open(os.path.join(self.root_dir, f"{file_path}.png"))
             img = img.resize(self.img_wh, Image.LANCZOS)
@@ -208,8 +211,8 @@ class BlenderEfficientShadows(Dataset):
                       'pixels': pixels, # pixel where rays originated from 
                       'rgbs': img,
                       'ppc': {
-                          'eye_pos': ppc.eye_pos, 
-                          'camera': ppc.camera,
+                          'eye_pos': eye_poses, 
+                          'camera': cameras,
                       },
                       'light_ppc': {
                           'eye_pos': self.light_ppc.eye_pos, 

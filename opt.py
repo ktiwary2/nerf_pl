@@ -90,5 +90,10 @@ def get_opts():
     parser.add_argument('--grad_on_light', default=False, action="store_true",
                         help='Calculate gradient on Light. If you set this to true, we will sample light depth every batch!')
 
+    parser.add_argument('--shadow_method', type=str, default='shadow_method_1',
+                        choices=['shadow_method_1', 'shadow_method_2'],
+                        help='shadow method to use')
+
+
 
     return parser.parse_args()

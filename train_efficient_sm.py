@@ -136,6 +136,11 @@ class NeRFSystem(LightningModule):
     def training_step(self, batch, batch_nb):
         log = {'lr': get_learning_rate(self.optimizer)}
         rays, rgbs, cam_pixels, _, _, _, ppc = self.decode_batch(batch)
+
+        # everything here should be num_rays big
+        assert len(ppc['eye_pos']) == len(ppc['camera'])
+        assert len(ppc['eye_pos']) == rgbs.shape[0]
+
         cam_results = self(rays, N_importance=self.hparams.N_importance)
         rays = None
 
@@ -163,22 +168,19 @@ class NeRFSystem(LightningModule):
         else:
             self.current_light_depth_cnt += 1 
 
-
         if self.hparams.batch_size == 1: 
             ppc = [ppc]
-            
-        # print("self.light_rays", self.light_rays.shape)  #
-        # print("self.light_pixels", self.light_pixels.shape, light_pixels.shape)
+        
         cam_results = efficient_sm(cam_pixels, self.light_pixels.to(rgbs.device),
                         cam_results, self.curr_light_results, 
                         ppc, self.light_ppc, 
                         image_shape=self.hparams.img_wh,  
                         fine_sampling=(self.hparams.N_importance > 0), 
-                        Light_N_importance=(self.curr_Light_N_importance>0))
+                        Light_N_importance=(self.curr_Light_N_importance>0), 
+                        shadow_method=self.hparams.shadow_method)
 
         # if (self.current_light_depth_cnt % self.hparams.sample_light_depth_every == 0) and (cam_results['rgb_coarse'].shape[0] > 5):
         #     print(shadow_maps_coarse[:5,:]) # only print the first elements 
-
 
         log['train/loss'] = loss = self.loss(cam_results, rgbs)
         typ = 'fine' if 'rgb_fine' in cam_results else 'coarse'
@@ -194,17 +196,15 @@ class NeRFSystem(LightningModule):
 
     def validation_step(self, batch, batch_nb):
         # print("---------------Starting Validation---------------")
-        rays, rgbs, cam_pixels, light_rays, light_pixels, light_ppc, ppc = self.decode_batch(batch)
+        rays, rgbs, cam_pixels, _, _, _, ppc = self.decode_batch(batch)
         rays = rays.squeeze() # (H*W,3)
-        light_rays = light_rays.squeeze() # (H*W,3)
         rgbs = rgbs.squeeze() # (H*W,3)
-
+        print("rgbs.shape", rgbs.shape)
         with torch.no_grad():
             cam_results = self(rays, N_importance=self.hparams.N_importance)
             rays = None
-            light_results = self(light_rays, N_importance=self.hparams.N_importance, 
+            light_results = self(self.light_rays.to(rgbs.device), N_importance=self.hparams.N_importance, 
                                  were_gradients_computed=False)
-            light_rays = None
             # ppc = [ppc]
             # light_ppc = [light_ppc]
 
@@ -213,7 +213,8 @@ class NeRFSystem(LightningModule):
                         ppc, self.light_ppc, 
                         image_shape=self.hparams.img_wh,  
                         fine_sampling=(self.hparams.N_importance > 0), 
-                        Light_N_importance=(self.hparams.N_importance > 0))
+                        Light_N_importance=(self.hparams.N_importance > 0), 
+                        shadow_method=self.hparams.shadow_method)
 
         log = {'val_loss': self.loss(cam_results, rgbs)}
         typ = 'fine' if 'rgb_fine' in cam_results else 'coarse'
