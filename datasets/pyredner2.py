@@ -9,29 +9,41 @@ from models.camera import Camera
 
 from .ray_utils import *
 
-class BlenderEfficientShadows(Dataset):
+class PyRednerShadowsDataset(Dataset):
     def __init__(self, root_dir, split='train', img_wh=(800, 800), hparams=None):
         self.root_dir = root_dir
         self.split = split
         assert img_wh[0] == img_wh[1], 'image width must equal image height!'
         self.img_wh = img_wh
+
+        # self._coord_trans = torch.diag(
+        #     torch.tensor([1, -1, -1, 1], dtype=torch.float32)
+        # )
+        self._coord_trans = torch.tensor([[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]], dtype=torch.float32)
+
         print("Training Image size:", img_wh)
         self.define_transforms()
 
         self.white_back = True
         # self.white_back = False # Setting it to False (!)
         self.hparams = hparams
-        self.black_and_white = False
-        if self.hparams is not None and self.hparams.black_and_white_test:
-            self.black_and_white = True
+
         self.read_meta()
         print("------------")
         print("NOTE: self.hparams.coords_trans is set to {} ".format(self.hparams.coords_trans))
         print("------------")
 
+        if self.hparams.coords_trans2:
+            print("------------")
+            print("NOTE: self.hparams.coords_trans2 is set to {} ".format(self.hparams.coords_trans2))
+            self._coord_trans = torch.diag(torch.tensor([1, -1, -1, 1], dtype=torch.float32))
+            print("setting coords trans to", self._coord_trans)
+            print("------------")
+            self.hparams.coords_trans = True
+
+
     def read_meta(self):
-        with open(os.path.join(self.root_dir,
-                               f"transforms_{self.split}.json"), 'r') as f:
+        with open(os.path.join(self.root_dir, f"transforms_{self.split}.json"), 'r') as f:
             self.meta = json.load(f)
 
         w, h = self.img_wh
@@ -58,8 +70,12 @@ class BlenderEfficientShadows(Dataset):
             get_ray_directions(h, w, self.focal) # (h, w, 3)
         
         ### Light Camera Matrix 
-        pose = np.array(self.meta['light_camera_transform_matrix'])[:3, :4]
+        light_eye_pos = np.array(self.meta['light_camera_transform_matrix']['eye_pos'], dtype = np.float32)
+        light_camera = np.array(self.meta['light_camera_transform_matrix']['camera'], dtype = np.float32)
+        pose = Camera.c2w_from_lookat(light_eye_pos, self.meta['look_at'])[:3, :4]
         l2w = torch.FloatTensor(pose)
+        if self.hparams.coords_trans:
+            l2w = l2w @ self._coord_trans # TODO (ktiwary): is this necessary??
 
         pixels_u = torch.arange(0, w, 1)
         pixels_v = torch.arange(0, h, 1)
@@ -74,13 +90,8 @@ class BlenderEfficientShadows(Dataset):
                                         self.light_near*torch.ones_like(rays_o[:, :1]),
                                         self.light_far*torch.ones_like(rays_o[:, :1])],
                                         1) # (h*w, 8)
-
-
-        hfov = self.meta['light_camera_angle_x'] * 180./np.pi
-        self.light_ppc = Camera(hfov, (h, w))
-        self.light_ppc.set_pose_using_blender_matrix(l2w, self.hparams.coords_trans)
+        self.light_ppc = Camera.from_camera_eyepos(torch.tensor(light_eye_pos), torch.tensor(light_camera))
         ### Light Camera Matrix 
-
         if self.split == 'train': # create buffer of all rays and rgb data
             self.image_paths = []
             self.poses = []
@@ -90,20 +101,20 @@ class BlenderEfficientShadows(Dataset):
             self.all_pixels = []
             
             for frame in self.meta['frames']:
-                pose = np.array(frame['transform_matrix'])[:3, :4]
+                eye_pos = np.array(frame['transform_matrix']['eye_pos'], dtype = np.float32)
+                camera = np.array(frame['transform_matrix']['camera'], dtype = np.float32)
+
+                pose = Camera.c2w_from_lookat(eye_pos, self.meta['look_at'])[:3, :4]
                 self.poses += [pose]
                 c2w = torch.FloatTensor(pose)
-
-                hfov = self.meta['camera_angle_x'] * 180./np.pi
-                ppc = Camera(hfov, (h, w))
-                ppc.set_pose_using_blender_matrix(c2w, self.hparams.coords_trans)
+                if self.hparams.coords_trans:
+                    c2w = c2w @ self._coord_trans # TODO (ktiwary): is this necessary?? 
+                ppc = Camera.from_camera_eyepos(torch.tensor(eye_pos), torch.tensor(camera))
                 self.all_ppc.extend([ppc]*h*w)
 
-                #### change it to load the shadow map
-                file_path = frame['file_path'].split('/')
-                file_path = 'sm_'+ file_path[-1]
+                #### shadow map file path
+                image_path = frame['sm_file_path']
                 ################
-                image_path = os.path.join(self.root_dir, f"{file_path}.png")
                 self.image_paths += [image_path]
 
                 img = Image.open(image_path)
@@ -119,7 +130,7 @@ class BlenderEfficientShadows(Dataset):
                 pixels_v = torch.arange(0, h, 1)
                 i, j = np.meshgrid(pixels_v.numpy(), pixels_u.numpy(), indexing='xy')
                 i = torch.tensor(i) + 0.5 #.unsqueeze(2) 
-                j = torch.tensor(j)+ 0.5 #.unsqueeze(2)
+                j = torch.tensor(j) + 0.5 #.unsqueeze(2)
                 pixels = torch.stack([i,j, torch.ones_like(i)], axis=-1).view(-1, 3) # (H*W,3)
 
                 rays_o, rays_d = get_rays(self.directions, c2w)
@@ -162,8 +173,6 @@ class BlenderEfficientShadows(Dataset):
             sample = {'rays': self.all_rays[idx], # (8) Ray originating from pixel (i,j)
                       'pixels': self.all_pixels[idx], # pixel where the ray originated from 
                       'rgbs': self.all_rgbs[idx], # (h*w,3)
-                    #   'ppc': [self.all_ppc[idx].eye_pos, self.all_ppc[idx].camera], 
-                    #   'light_ppc': [self.light_ppc.eye_pos, self.light_ppc.camera],
                       'ppc': {
                           'eye_pos': self.all_ppc[idx].eye_pos, 
                           'camera': self.all_ppc[idx].camera,
@@ -172,7 +181,6 @@ class BlenderEfficientShadows(Dataset):
                           'eye_pos': self.light_ppc.eye_pos, 
                           'camera': self.light_ppc.camera,
                       },
-                    #   'c2w': pose, # (3,4)
                     # pixel where the light ray originated from  
                       'light_pixels': self.light_pixels, #(h*w, 3)  
                     # light rays 
@@ -180,28 +188,28 @@ class BlenderEfficientShadows(Dataset):
                     }
 
         else: # create data for each image separately
-            frame = self.meta['frames'][idx]
-            file_path = frame['file_path'].split('/')
-            file_path = 'sm_'+ file_path[-1]
-
-            c2w = torch.FloatTensor(frame['transform_matrix'])[:3, :4]
-            ###########
             w, h = self.img_wh
-            hfov = self.meta['camera_angle_x'] * 180./np.pi
-            ppc = Camera(hfov, (h, w))
-            ppc.set_pose_using_blender_matrix(c2w, self.hparams.coords_trans)
-            eye_poses = [ppc.eye_pos]*h*w
-            cameras = [ppc.camera]*h*w
-
+            frame = self.meta['frames'][idx]
             ###########
-            img = Image.open(os.path.join(self.root_dir, f"{file_path}.png"))
+            eye_pos = np.array(frame['transform_matrix']['eye_pos'], dtype = np.float32)
+            camera = np.array(frame['transform_matrix']['camera'], dtype = np.float32)
+
+            pose = Camera.c2w_from_lookat(eye_pos, self.meta['look_at'])[:3, :4]
+            c2w = torch.FloatTensor(pose)
+            if self.hparams.coords_trans:
+                c2w = c2w @ self._coord_trans
+
+            eye_poses = [eye_pos]*h*w
+            cameras = [camera]*h*w
+            ###########
+            file_path = frame['sm_file_path']
+            img = Image.open(file_path)
             img = img.resize(self.img_wh, Image.LANCZOS)
             if self.hparams.blur:
                 img = img.filter(ImageFilter.GaussianBlur(5))
             img = self.transform(img) # (3, H, W)
             img = img.view(3, -1).permute(1, 0) # (H*W, 3) RGBA
-            # img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
-
+            ###########
             pixels_u = torch.arange(0, w, 1)
             pixels_v = torch.arange(0, h, 1)
             i, j = np.meshgrid(pixels_v.numpy(), pixels_u.numpy(), indexing='xy')

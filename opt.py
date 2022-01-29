@@ -7,7 +7,7 @@ def get_opts():
                         default='/home/ubuntu/data/nerf_example_data/nerf_synthetic/lego',
                         help='root directory of dataset')
     parser.add_argument('--dataset_name', type=str, default='blender',
-                        choices=['blender', 'llff', "pyredner", 'shadows', 'efficient_sm'],
+                        choices=['blender', 'llff', "pyredner", 'shadows', 'efficient_sm', 'pyredner2'],
                         help='which dataset to train/val')
     parser.add_argument('--img_wh', nargs="+", type=int, default=[128, 128],
                         help='resolution (img_w, img_h) of the image')
@@ -94,6 +94,14 @@ def get_opts():
                         choices=['shadow_method_1', 'shadow_method_2'],
                         help='shadow method to use')
 
+    parser.add_argument('--coords_trans', default=False, action="store_true",
+                        help='Perform coords_trans on the blender coords to pyt them in the standard coordinate system.')
+
+    parser.add_argument('--coords_trans2', default=False, action="store_true",
+                        help='Perform coords_trans on the blender coords to pyt them in the standard coordinate system.')
+
+    parser.add_argument('--blur', default=False, action="store_true",
+                        help='blur image with radius 5.')
 
 
     return parser.parse_args()

@@ -96,9 +96,10 @@ class NeRFSystem(LightningModule):
         return results
 
     def prepare_data(self):
-        print("Using efficient_sm shadow DataLoader (hardcoded)")
-        # dataset = dataset_dict[self.hparams.dataset_name]
-        dataset = dataset_dict['efficient_sm']
+        dataset = dataset_dict[self.hparams.dataset_name]
+        print("Using {} shadow DataLoader (hardcoded)".format(self.hparams.dataset_name))
+        if self.hparams.dataset_name not in ['efficient_sm', 'pyredner2']:
+            raise ValueError("{} not allowed ".format(self.hparams.dataset_name))
         kwargs = {'root_dir': self.hparams.root_dir,
                   'img_wh': tuple(self.hparams.img_wh), 
                   'hparams': self.hparams
@@ -118,7 +119,7 @@ class NeRFSystem(LightningModule):
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset,
-                          shuffle=True,
+                          shuffle=False, # SET TO False for faster inference !!!
                           num_workers=4,
                           batch_size=self.hparams.batch_size,
                           pin_memory=True)

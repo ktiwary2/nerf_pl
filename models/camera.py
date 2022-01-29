@@ -10,6 +10,13 @@ class Camera():
         self.camera = self.initialize_camera_matrix(hfov, res)
         self.res = res
 
+        """
+        Blender to standard coordinate system transform. (ours)
+        Standard coordinate system is: x right y up z out (out=screen to face)
+        Blender coordinate system is: x right y in z up
+        """
+        self._coord_trans = torch.tensor([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]], dtype=torch.float32)
+
     def initialize_camera_matrix(self, hfov, res):
         """
         Returns a 3x3 Matrix 
@@ -59,13 +66,25 @@ class Camera():
         cam_to_world[3, :] = [0, 0, 0, 1]
         return cam_to_world
 
-    def set_pose_using_blender_matrix(self, c2w):
+    def set_pose_using_blender_matrix(self, c2w, transform_coords=False):
         """
         c2w: (type tensor) [3,4] doesn't know what the resolution of the image is (has the extrinsic parameters)
         pixels = K @ c2w @ p -> ppc @ p 
         """
-        self.eye_pos = c2w[:, 3].float() # Camera location 
-        self.camera = c2w[:, :3].float() @ self.camera.float() 
+        if transform_coords:
+            # print("self.eye_pos", c2w[:, 3])
+            eye = torch.cat([c2w[:, 3].float(), torch.tensor([1])])
+            self.eye_pos = eye @ self._coord_trans
+            self.eye_pos = self.eye_pos[:3]
+            # print("self.eye_pos", self.eye_pos)
+            c2w_t = c2w.float() @ self._coord_trans
+            # print(c2w_t)
+            self.camera = c2w_t[:, :3].float() @ self.camera.float()
+            # print(self.camera)
+            # raise 
+        else:
+            self.eye_pos = c2w[:, 3].float() # Camera location 
+            self.camera = c2w[:, :3].float() @ self.camera.float() 
 
     def set_camera_matrix(self, eye_pos, lookAtPoint, upGuidance):
         """
