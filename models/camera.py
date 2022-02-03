@@ -85,7 +85,7 @@ class Camera():
         else:
             self.eye_pos = c2w[:, 3].float() # Camera location c2w (x,y,z) vs. (x,z,-y)
             self.camera = c2w[:, :3].float() @ self.camera.float() 
-            print(self.camera, self.eye_pos)
+            # print(self.camera, self.eye_pos)
 
     def set_camera_matrix(self, eye_pos, lookAtPoint, upGuidance):
         """
