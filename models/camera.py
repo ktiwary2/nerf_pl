@@ -73,18 +73,19 @@ class Camera():
         """
         if transform_coords:
             # print("self.eye_pos", c2w[:, 3])
-            eye = torch.cat([c2w[:, 3].float(), torch.tensor([1])])
-            self.eye_pos = eye @ self._coord_trans
-            self.eye_pos = self.eye_pos[:3]
-            # print("self.eye_pos", self.eye_pos)
-            c2w_t = c2w.float() @ self._coord_trans
-            # print(c2w_t)
-            self.camera = c2w_t[:, :3].float() @ self.camera.float()
+            # eye = torch.cat([c2w[:, 3].float(), torch.tensor([1])])
+            # self.eye_pos = eye @ self._coord_trans
+            # self.eye_pos = self.eye_pos[:3]
+            # # print("self.eye_pos", self.eye_pos)
+            # c2w_t = c2w.float() @ self._coord_trans
+            # # print(c2w_t)
+            # self.camera = c2w_t[:, :3].float() @ self.camera.float()
             # print(self.camera)
-            # raise 
+            raise ValueError("This is not needed anymore. please do not use this flag.")
         else:
-            self.eye_pos = c2w[:, 3].float() # Camera location 
+            self.eye_pos = c2w[:, 3].float() # Camera location c2w (x,y,z) vs. (x,z,-y)
             self.camera = c2w[:, :3].float() @ self.camera.float() 
+            print(self.camera, self.eye_pos)
 
     def set_camera_matrix(self, eye_pos, lookAtPoint, upGuidance):
         """
