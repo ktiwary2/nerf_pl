@@ -31,7 +31,6 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 
-
 class NeRFSystem(LightningModule):
     def __init__(self, hparams):
         super(NeRFSystem, self).__init__()

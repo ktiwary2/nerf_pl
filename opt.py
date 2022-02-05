@@ -7,7 +7,8 @@ def get_opts():
                         default='/home/ubuntu/data/nerf_example_data/nerf_synthetic/lego',
                         help='root directory of dataset')
     parser.add_argument('--dataset_name', type=str, default='blender',
-                        choices=['blender', 'llff', "pyredner", 'shadows', 'efficient_sm', 'pyredner2'],
+                        # choices=['blender', 'llff', "pyredner", 'shadows', 'efficient_sm', 'pyredner2', 'rgb_sm'],
+                        choices=['blender', 'efficient_sm', 'pyredner2', 'rgb_sm'],
                         help='which dataset to train/val')
     parser.add_argument('--img_wh', nargs="+", type=int, default=[128, 128],
                         help='resolution (img_w, img_h) of the image')
@@ -31,7 +32,7 @@ def get_opts():
 
     parser.add_argument('--batch_size', type=int, default=1024,
                         help='batch size')
-    parser.add_argument('--chunk', type=int, default=32*8,
+    parser.add_argument('--chunk', type=int, default=32*1024,
                         help='chunk size to split the input to avoid OOM')
     parser.add_argument('--num_epochs', type=int, default=16,
                         help='number of training epochs')
@@ -70,6 +71,13 @@ def get_opts():
     #### params for poly ####
     parser.add_argument('--poly_exp', type=float, default=0.9,
                         help='exponent for polynomial learning rate decay')
+
+    parser.add_argument('--sm_weight', type=float, default=1.0,
+                        help='weight for sm loss')
+
+    parser.add_argument('--rgb_weight', type=float, default=1.0,
+                        help='weight for rgb loss')
+
     ###########################
 
     parser.add_argument('--exp_name', type=str, default='exp',
@@ -90,7 +98,7 @@ def get_opts():
     parser.add_argument('--grad_on_light', default=False, action="store_true",
                         help='Calculate gradient on Light. If you set this to true, we will sample light depth every batch!')
 
-    parser.add_argument('--shadow_method', type=str, default='shadow_method_1',
+    parser.add_argument('--shadow_method', type=str, default='shadow_method_2',
                         choices=['shadow_method_1', 'shadow_method_2'],
                         help='shadow method to use')
 
@@ -100,8 +108,9 @@ def get_opts():
     parser.add_argument('--coords_trans2', default=False, action="store_true",
                         help='Perform coords_trans on the blender coords to pyt them in the standard coordinate system.')
 
-    parser.add_argument('--blur', default=False, action="store_true",
-                        help='blur image with radius 5.')
+    parser.add_argument('--blur', type=int, default= -1, help='blur image with radius r.')
+    
+    parser.add_argument('--max_images', type=int, default= 100, help='Max Train RGB and Shadow Images to take.')
 
 
     return parser.parse_args()

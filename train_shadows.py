@@ -28,7 +28,6 @@ from pytorch_lightning.logging import TestTubeLogger
 
 to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 
-
 class NeRFSystem(LightningModule):
     def __init__(self, hparams):
         super(NeRFSystem, self).__init__()

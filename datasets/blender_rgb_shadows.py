@@ -9,7 +9,7 @@ from models.camera import Camera
 
 from .ray_utils import *
 
-class BlenderEfficientShadows(Dataset):
+class BlenderRGBEfficientShadows(Dataset):
     def __init__(self, root_dir, split='train', img_wh=(800, 800), hparams=None):
         self.root_dir = root_dir
         self.split = split
@@ -17,17 +17,25 @@ class BlenderEfficientShadows(Dataset):
         self.img_wh = img_wh
         print("Training Image size:", img_wh)
         self.define_transforms()
+        self.hparams = hparams
+
+        if self.split == 'train':
+            self.max_images = self.hparams.max_images
+        else:
+            self.max_images = 25
+        print("------------")
+        print("NOTE: Using {} max images from dataset.".format(self.max_images))
+        print("------------")
 
         self.white_back = True
         # self.white_back = False # Setting it to False (!)
-        self.hparams = hparams
         self.black_and_white = False
         if self.hparams is not None and self.hparams.black_and_white_test:
             self.black_and_white = True
         self.read_meta()
-        print("------------")
-        print("NOTE: self.hparams.coords_trans is set to {} ".format(self.hparams.coords_trans))
-        print("------------")
+        # Hardcoded
+        self.hparams.coords_trans = False
+
 
     def read_meta(self):
         with open(os.path.join(self.root_dir,
@@ -81,10 +89,14 @@ class BlenderEfficientShadows(Dataset):
         self.light_ppc.set_pose_using_blender_matrix(l2w, self.hparams.coords_trans)
         ### Light Camera Matrix 
 
+        if not self.max_images == -1: 
+            np.random.shuffle(self.meta['frames'])
+            self.meta['frames'] = self.meta['frames'][:self.max_images] # take the first max 
+
         if self.split == 'train': # create buffer of all rays and rgb data
-            self.image_paths = []
             self.poses = []
             self.all_rays = []
+            self.all_sm_rgbs = []
             self.all_rgbs = []
             self.all_ppc = []
             self.all_pixels = []
@@ -99,22 +111,29 @@ class BlenderEfficientShadows(Dataset):
                 ppc.set_pose_using_blender_matrix(c2w, self.hparams.coords_trans)
                 self.all_ppc.extend([ppc]*h*w)
 
-                #### change it to load the shadow map
-                file_path = frame['file_path'].split('/')
-                file_path = 'sm_'+ file_path[-1]
-                ################
+                #### load the rgb image
+                file_path = frame['file_path']
                 image_path = os.path.join(self.root_dir, f"{file_path}.png")
-                self.image_paths += [image_path]
+                rgb = Image.open(image_path)
+                rgb = rgb.resize(self.img_wh, Image.LANCZOS)
+                rgb = self.transform(rgb) # (4, h, w)
+                rgb = rgb.view(4, -1).permute(1, 0) # (h*w, 4) RGBA
+                rgb = rgb[:, :3]*rgb[:, -1:] + (1-rgb[:, -1:]) # blend A to RGB
 
-                img = Image.open(image_path)
-                img = img.resize(self.img_wh, Image.LANCZOS)
+                #### load the shadow map
+                file_path = frame['file_path'].split('/')
+                sm_file_path = 'sm_'+ file_path[-1]
+                image_path = os.path.join(self.root_dir, f"{sm_file_path}.png")
+
+                sm = Image.open(image_path)
+                sm = sm.resize(self.img_wh, Image.LANCZOS)
                 if not (self.hparams.blur == -1):
-                    img = img.filter(ImageFilter.GaussianBlur(self.hparams.blur))
+                    sm = sm.filter(ImageFilter.GaussianBlur(self.hparams.blur))
 
-                img = self.transform(img) # (4, h, w)
-                img = img.view(3, -1).permute(1, 0) # (h*w, 4) RGBA
+                sm = self.transform(sm) # (3, h, w)
+                sm = sm.view(3, -1).permute(1, 0) # (h*w, 3) RGBA
 
-                # Figure out where the rays originated from 
+                #### Figure out where the rays originated from 
                 pixels_u = torch.arange(0, w, 1)
                 pixels_v = torch.arange(0, h, 1)
                 i, j = np.meshgrid(pixels_v.numpy(), pixels_u.numpy(), indexing='xy')
@@ -122,21 +141,24 @@ class BlenderEfficientShadows(Dataset):
                 j = torch.tensor(j)+ 0.5 #.unsqueeze(2)
                 pixels = torch.stack([i,j, torch.ones_like(i)], axis=-1).view(-1, 3) # (H*W,3)
 
+                #### Compute rays coming out of the camera
                 rays_o, rays_d = get_rays(self.directions, c2w)
                 rays = torch.cat([rays_o, rays_d, 
                                 self.near*torch.ones_like(rays_o[:, :1]),
                                 self.far*torch.ones_like(rays_o[:, :1])],
                                 1) # (H*W, 8)
 
-                self.all_rgbs += [img]
+                self.all_sm_rgbs += [sm]
+                self.all_rgbs += [rgb]
                 self.all_rays += [rays]
                 self.all_pixels += [pixels]
 
             self.all_rays = torch.cat(self.all_rays, 0) # (len(self.meta['frames])*h*w, 3)
             self.all_pixels = torch.cat(self.all_pixels, 0) # (len(self.meta['frames])*h*w, 3)
             self.all_rgbs = torch.cat(self.all_rgbs, 0) # (len(self.meta['frames])*h*w, 3)
-            print("self.all_rgbs.shape, self.all_rays.shape, self.all_pixels.shape, all_ppc.shape", 
-                    self.all_rgbs.shape, self.all_rays.shape, self.all_pixels.shape, len(self.all_ppc))
+            self.all_sm_rgbs = torch.cat(self.all_sm_rgbs, 0) # (len(self.meta['frames])*h*w, 3)
+            print("self.all_sm_rgbs.shape, self.all_rays.shape, self.all_pixels.shape, all_ppc.shape", 
+                    self.all_sm_rgbs.shape, self.all_rays.shape, self.all_pixels.shape, len(self.all_ppc))
 
     def define_transforms(self):
         self.transform = T.ToTensor()
@@ -162,27 +184,47 @@ class BlenderEfficientShadows(Dataset):
             sample = {'rays': self.all_rays[idx], # (8) Ray originating from pixel (i,j)
                       'pixels': self.all_pixels[idx], # pixel where the ray originated from 
                       'rgbs': self.all_rgbs[idx], # (h*w,3)
+                      'sm': self.all_sm_rgbs[idx], # (h*w,3)
                     #   'ppc': [self.all_ppc[idx].eye_pos, self.all_ppc[idx].camera], 
                     #   'light_ppc': [self.light_ppc.eye_pos, self.light_ppc.camera],
                       'ppc': {
                           'eye_pos': self.all_ppc[idx].eye_pos, 
                           'camera': self.all_ppc[idx].camera,
                       },
-                      'light_ppc': {
-                          'eye_pos': self.light_ppc.eye_pos, 
-                          'camera': self.light_ppc.camera,
-                      },
-                    #   'c2w': pose, # (3,4)
-                    # pixel where the light ray originated from  
-                      'light_pixels': self.light_pixels, #(h*w, 3)  
-                    # light rays 
-                      'light_rays': self.light_rays, #(h*w,8)
+                    #   'light_ppc': {
+                    #       'eye_pos': self.light_ppc.eye_pos, 
+                    #       'camera': self.light_ppc.camera,
+                    #   },
+                    # #   'c2w': pose, # (3,4)
+                    # # pixel where the light ray originated from  
+                    #   'light_pixels': self.light_pixels, #(h*w, 3)  
+                    # # light rays 
+                    #   'light_rays': self.light_rays, #(h*w,8)
                     }
 
         else: # create data for each image separately
             frame = self.meta['frames'][idx]
+            #### load the rgb image
+            file_path = frame['file_path']
+            image_path = os.path.join(self.root_dir, f"{file_path}.png")
+            rgb = Image.open(image_path)
+            rgb = rgb.resize(self.img_wh, Image.LANCZOS)
+            rgb = self.transform(rgb) # (4, h, w)
+            rgb = rgb.view(4, -1).permute(1, 0) # (h*w, 4) RGBA
+            rgb = rgb[:, :3]*rgb[:, -1:] + (1-rgb[:, -1:]) # blend A to RGB
+
+            #### load the shadow map
             file_path = frame['file_path'].split('/')
-            file_path = 'sm_'+ file_path[-1]
+            sm_file_path = 'sm_'+ file_path[-1]
+            image_path = os.path.join(self.root_dir, f"{sm_file_path}.png")
+
+            sm = Image.open(image_path)
+            sm = sm.resize(self.img_wh, Image.LANCZOS)
+            if not (self.hparams.blur == -1):
+                sm = sm.filter(ImageFilter.GaussianBlur(self.hparams.blur))
+
+            sm = self.transform(sm) # (4, h, w)
+            sm = sm.view(3, -1).permute(1, 0) # (h*w, 4) RGBA
 
             c2w = torch.FloatTensor(frame['transform_matrix'])[:3, :4]
             ###########
@@ -193,15 +235,7 @@ class BlenderEfficientShadows(Dataset):
             eye_poses = [ppc.eye_pos]*h*w
             cameras = [ppc.camera]*h*w
 
-            ###########
-            img = Image.open(os.path.join(self.root_dir, f"{file_path}.png"))
-            img = img.resize(self.img_wh, Image.LANCZOS)
-            if self.hparams.blur:
-                img = img.filter(ImageFilter.GaussianBlur(5))
-            img = self.transform(img) # (3, H, W)
-            img = img.view(3, -1).permute(1, 0) # (H*W, 3) RGBA
-            # img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB
-
+            #### Figure out where the rays originated from 
             pixels_u = torch.arange(0, w, 1)
             pixels_v = torch.arange(0, h, 1)
             i, j = np.meshgrid(pixels_v.numpy(), pixels_u.numpy(), indexing='xy')
@@ -209,29 +243,29 @@ class BlenderEfficientShadows(Dataset):
             j = torch.tensor(j)+ 0.5 #.unsqueeze(2)
             pixels = torch.stack([i,j, torch.ones_like(i)], axis=-1).view(-1, 3) # (H*W,3)
 
+            #### Compute rays coming out of the camera
             rays_o, rays_d = get_rays(self.directions, c2w)
-
             rays = torch.cat([rays_o, rays_d, 
                               self.near*torch.ones_like(rays_o[:, :1]),
                               self.far*torch.ones_like(rays_o[:, :1])],
                               1) # (H*W, 8)
-            # valid_mask = (img[-1]>0).flatten() # (H*W) valid color area
 
             sample = {'rays': rays,
                       'pixels': pixels, # pixel where rays originated from 
-                      'rgbs': img,
+                      'rgbs': rgb, # (h*w,3)
+                      'sm': sm, # (h*w,3)
                       'ppc': {
                           'eye_pos': eye_poses, 
                           'camera': cameras,
                       },
-                      'light_ppc': {
-                          'eye_pos': self.light_ppc.eye_pos, 
-                          'camera': self.light_ppc.camera,
-                      },
-                    # pixel where the light ray originated from  
-                      'light_pixels': self.light_pixels, #(h*w, 3)  
-                    # light rays 
-                      'light_rays': self.light_rays, #(h*w,8)
+                    #   'light_ppc': {
+                    #       'eye_pos': self.light_ppc.eye_pos, 
+                    #       'camera': self.light_ppc.camera,
+                    #   },
+                    # # pixel where the light ray originated from  
+                    #   'light_pixels': self.light_pixels, #(h*w, 3)  
+                    # # light rays 
+                    #   'light_rays': self.light_rays, #(h*w,8)
                     }
 
         return sample
