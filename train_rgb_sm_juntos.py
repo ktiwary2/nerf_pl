@@ -11,6 +11,7 @@ from datasets import dataset_dict
 # models
 from models.nerf import Embedding, NeRF
 from models.rendering_rgb_sm import render_rays, efficient_sm
+from models.efficient_shadow_mapping import normalize_min_max
 
 # optimizer, scheduler, visualization
 from utils import *
@@ -123,14 +124,14 @@ class NeRFSystem(LightningModule):
                           shuffle=False, # SET TO False for faster inference !!!
                           num_workers=4,
                           batch_size=self.hparams.batch_size,
-                          pin_memory=True)
+                          pin_memory=False)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset,
                           shuffle=False,
                           num_workers=4,
                           batch_size=1, # validate one image (H*W rays) at a time
-                          pin_memory=True)
+                          pin_memory=False)
     
     # def get_light_depth_map(self, light_pixels, light_rays):
 
@@ -235,7 +236,8 @@ class NeRFSystem(LightningModule):
             img = img.permute(2, 0, 1) # (3, H, W)
             img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
             # print(cam_results[f'disp_map_{typ}'], type(cam_results[f'disp_map_{typ}']))
-            disp8 = to8b(cam_results[f'disp_map_{typ}'].view(H, W).cpu().numpy())
+            disp = normalize_min_max(cam_results[f'disp_map_{typ}'].view(H, W))
+            disp8 = to8b(disp.cpu().numpy())
             depth8 = visualize_depth(cam_results[f'depth_{typ}'].view(H, W), to_tensor=False) 
             depth = visualize_depth(cam_results[f'depth_{typ}'].view(H, W)) # (3, H, W)
             if not os.path.exists(f'logs_rgb_eff_sm/logs/{self.hparams.exp_name}/imgs'):

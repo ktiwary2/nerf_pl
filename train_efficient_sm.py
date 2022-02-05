@@ -228,7 +228,8 @@ class NeRFSystem(LightningModule):
             gt8 = to8b(rgbs.view(H, W, 3).cpu().numpy())
             img = img.permute(2, 0, 1) # (3, H, W)
             img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
-            disp8 = to8b(cam_results[f'disp_map_{typ}'].view(H, W).cpu().numpy())
+            disp = normalize_min_max(cam_results[f'disp_map_{typ}'].view(H, W))
+            disp8 = to8b(disp.cpu().numpy())
             depth8 = visualize_depth(cam_results[f'depth_{typ}'].view(H, W), to_tensor=False) 
             depth = visualize_depth(cam_results[f'depth_{typ}'].view(H, W)) # (3, H, W)
             if not os.path.exists(f'eff_sm_updated_light_matrix/logs/{self.hparams.exp_name}/imgs'):
