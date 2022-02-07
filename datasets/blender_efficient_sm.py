@@ -108,7 +108,7 @@ class BlenderEfficientShadows(Dataset):
 
                 img = Image.open(image_path)
                 img = img.resize(self.img_wh, Image.LANCZOS)
-                if not (self.hparams.blur == -1):
+                if not self.hparams.blur == -1:
                     img = img.filter(ImageFilter.GaussianBlur(self.hparams.blur))
 
                 img = self.transform(img) # (4, h, w)
@@ -137,6 +137,20 @@ class BlenderEfficientShadows(Dataset):
             self.all_rgbs = torch.cat(self.all_rgbs, 0) # (len(self.meta['frames])*h*w, 3)
             print("self.all_rgbs.shape, self.all_rays.shape, self.all_pixels.shape, all_ppc.shape", 
                     self.all_rgbs.shape, self.all_rays.shape, self.all_pixels.shape, len(self.all_ppc))
+            if not (float(self.hparams.white_pix) == -1):
+                print("-------------------------- rgb max {}, min {}".format(self.all_rgbs.max(), self.all_rgbs.min()))
+                print("only Training on pixels with shadow map values > 0.")
+                all_bw = (self.all_rgbs[:,0] + self.all_rgbs[:,1] + self.all_rgbs[:,2])/3.
+                idx = torch.where(all_bw > float(self.hparams.white_pix))
+                self.all_rgbs = self.all_rgbs[idx]
+                self.all_pixels = self.all_pixels[idx]
+                self.all_rays = self.all_rays[idx]
+                new_ppc = []
+                for i in idx[0]:
+                    new_ppc.append(self.all_ppc[i])
+                self.all_ppc = new_ppc
+                print("self.all_rgbs.shape, self.all_rays.shape, self.all_pixels.shape, all_ppc.shape", 
+                        self.all_rgbs.shape, self.all_rays.shape, self.all_pixels.shape, len(self.all_ppc))
 
     def define_transforms(self):
         self.transform = T.ToTensor()
@@ -196,8 +210,8 @@ class BlenderEfficientShadows(Dataset):
             ###########
             img = Image.open(os.path.join(self.root_dir, f"{file_path}.png"))
             img = img.resize(self.img_wh, Image.LANCZOS)
-            if self.hparams.blur:
-                img = img.filter(ImageFilter.GaussianBlur(5))
+            if not self.hparams.blur == -1:
+                img = img.filter(ImageFilter.GaussianBlur(self.hparams.blur))
             img = self.transform(img) # (3, H, W)
             img = img.view(3, -1).permute(1, 0) # (H*W, 3) RGBA
             # img = img[:, :3]*img[:, -1:] + (1-img[:, -1:]) # blend A to RGB

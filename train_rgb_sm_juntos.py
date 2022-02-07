@@ -121,17 +121,17 @@ class NeRFSystem(LightningModule):
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset,
-                          shuffle=False, # SET TO False for faster inference !!!
-                          num_workers=4,
+                          shuffle=True, # SET TO False for faster inference !!!
+                          num_workers=0,
                           batch_size=self.hparams.batch_size,
-                          pin_memory=False)
+                          pin_memory=True)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset,
                           shuffle=False,
-                          num_workers=4,
+                          num_workers=0,
                           batch_size=1, # validate one image (H*W rays) at a time
-                          pin_memory=False)
+                          pin_memory=True)
     
     # def get_light_depth_map(self, light_pixels, light_rays):
 
@@ -163,8 +163,7 @@ class NeRFSystem(LightningModule):
                 with torch.no_grad():
                     # maybe only use coarse depth for light? no need for fine? 
                     self.curr_light_results = self(self.light_rays.to(rgbs.device), 
-                                    N_importance=self.curr_Light_N_importance, 
-                                    were_gradients_computed=False)
+                                    N_importance=self.curr_Light_N_importance)
                     self.curr_light_results['opacity_coarse'] = None
                     self.curr_light_results['opacity_fine'] = None
         else:

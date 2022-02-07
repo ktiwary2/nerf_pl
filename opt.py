@@ -86,6 +86,9 @@ def get_opts():
     parser.add_argument('--black_and_white_test', default=False, action="store_true",
                         help='Converts all images to black and white images.')
 
+    parser.add_argument('--white_pix', default=-1.0,
+                        help='Selects only pixels over 0.')
+
     parser.add_argument('--num_sanity_val_steps', default=1, type=int,
                         help='Converts all images to black and white images.')
 

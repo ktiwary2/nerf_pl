@@ -11,6 +11,7 @@ from datasets import dataset_dict
 # models
 from models.nerf import Embedding, NeRF
 from models.rendering_shadows import render_rays, efficient_sm
+from models.efficient_shadow_mapping import normalize_min_max
 
 # optimizer, scheduler, visualization
 from utils import *
@@ -120,14 +121,14 @@ class NeRFSystem(LightningModule):
     def train_dataloader(self):
         return DataLoader(self.train_dataset,
                           shuffle=False, # SET TO False for faster inference !!!
-                          num_workers=4,
+                          num_workers=0,
                           batch_size=self.hparams.batch_size,
                           pin_memory=True)
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset,
                           shuffle=False,
-                          num_workers=4,
+                          num_workers=0,
                           batch_size=1, # validate one image (H*W rays) at a time
                           pin_memory=True)
     
