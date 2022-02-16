@@ -1,4 +1,5 @@
 import os
+import imageio
 
 from pytorch_lightning.accelerators import accelerator
 from opt import get_opts
@@ -27,6 +28,7 @@ from pytorch_lightning.callbacks import ModelCheckpoint, TQDMProgressBar
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.plugins import DDPPlugin
 
+to8b = lambda x : (255*np.clip(x,0,1)).astype(np.uint8)
 
 class NeRFSystem(LightningModule):
     def __init__(self, hparams):
@@ -129,12 +131,27 @@ class NeRFSystem(LightningModule):
     
         if batch_nb == 0:
             W, H = self.hparams.img_wh
-            img = results[f'rgb_{typ}'].view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
-            img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
+            img = results[f'rgb_{typ}'].view(H, W, 3).cpu() # (3, H, W)
+            rgb8 = to8b(img.numpy())
+            img = img.permute(2, 0, 1)
+            img_gt = rgbs.view(H, W, 3).cpu() # (3, H, W)
+            gt8 = to8b(img_gt.numpy())
+            img_gt = img_gt.permute(2, 0, 1)
             depth = visualize_depth(results[f'depth_{typ}'].view(H, W)) # (3, H, W)
+            depth8 = visualize_depth(results[f'depth_{typ}'].view(H, W), return_as_numpy=True) # (3, H, W)
             stack = torch.stack([img_gt, img, depth]) # (3, 3, H, W)
             self.logger.experiment.add_images('val/GT_pred_depth',
                                                stack, self.global_step)
+
+            if not os.path.exists(f'logs/{self.hparams.exp_name}/imgs'):
+                os.mkdir(f'logs/{self.hparams.exp_name}/imgs')
+
+            filename = os.path.join(f'logs/{self.hparams.exp_name}/imgs', 'gt_{:03d}.png'.format(self.current_epoch))
+            imageio.imwrite(filename, gt8)
+            filename = os.path.join(f'logs/{self.hparams.exp_name}/imgs', 'rgb_{:03d}.png'.format(self.current_epoch))
+            imageio.imwrite(filename, rgb8)
+            filename = os.path.join(f'logs/{self.hparams.exp_name}/imgs', 'depth_{:03d}.png'.format(self.current_epoch))
+            imageio.imwrite(filename, depth8)
 
         psnr_ = psnr(results[f'rgb_{typ}'], rgbs)
         log['val_psnr'] = psnr_

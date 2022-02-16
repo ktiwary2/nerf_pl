@@ -3,7 +3,7 @@ import numpy as np
 import cv2
 from PIL import Image
 
-def visualize_depth(depth, cmap=cv2.COLORMAP_JET):
+def visualize_depth(depth, cmap=cv2.COLORMAP_JET, return_as_numpy=False):
     """
     depth: (H, W)
     """
@@ -14,5 +14,7 @@ def visualize_depth(depth, cmap=cv2.COLORMAP_JET):
     x = (x-mi)/max(ma-mi, 1e-8) # normalize to 0~1
     x = (255*x).astype(np.uint8)
     x_ = Image.fromarray(cv2.applyColorMap(x, cmap))
+    if return_as_numpy:
+        return np.array(x_)
     x_ = T.ToTensor()(x_) # (3, H, W)
     return x_

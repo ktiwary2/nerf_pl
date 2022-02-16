@@ -4,12 +4,12 @@ def get_opts():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--root_dir', type=str,
-                        default='/home/ubuntu/data/nerf_example_data/nerf_synthetic/lego',
+                        default='../../datasets/variable_light/results_500_chair',
                         help='root directory of dataset')
-    parser.add_argument('--dataset_name', type=str, default='blender',
-                        choices=['blender', 'llff'],
+    parser.add_argument('--dataset_name', type=str, default='blender_light_sm',
+                        choices=['blender', 'llff', 'blender_light_sm'],
                         help='which dataset to train/val')
-    parser.add_argument('--img_wh', nargs="+", type=int, default=[800, 800],
+    parser.add_argument('--img_wh', nargs="+", type=int, default=[200, 200],
                         help='resolution (img_w, img_h) of the image')
     parser.add_argument('--spheric_poses', default=False, action="store_true",
                         help='whether images are taken in spheric poses (for llff)')
@@ -76,5 +76,34 @@ def get_opts():
 
     parser.add_argument('--exp_name', type=str, default='exp',
                         help='experiment name')
+    ###########################
+    #### params for shadow mapping ####
+    parser.add_argument('--num_sanity_val_steps', default=1, type=int,
+                        help='Number of Sanity Val Steps')
+
+    parser.add_argument('--grad_on_light', default=False, action="store_true",
+                        help='Update NN with Light Samples as well...')
+
+    parser.add_argument('--use_prob_weighting', default=False, action="store_true",
+                        help='Use Prob. weighting to select white pixels...')
+
+    parser.add_argument('--process_rgb', default=False, action="store_true",
+                        help='Process RGB Images in addition to the shadow maps.')
+
+    parser.add_argument('--shadow_mapper2d', default=False, action="store_true",
+                        help='Use shadow_mapper2d, batch_size = h*w')
+
+    parser.add_argument('--shadow_method', type=str, default='shadow_method_2',
+                        choices=['shadow_method_1', 'shadow_method_2'],
+                        help='Shadow Method to use')
+
+    parser.add_argument('--sm_weight', type=float, default=1.0,
+                        help='weight for sm loss')
+
+    parser.add_argument('--rgb_weight', type=float, default=1.0,
+                        help='weight for rgb loss')
+
+    parser.add_argument('--blur', type=int, default= -1, 
+                        help='blur image with radius r.')
 
     return parser.parse_args()
