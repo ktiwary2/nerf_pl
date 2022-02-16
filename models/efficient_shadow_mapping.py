@@ -10,6 +10,12 @@ EPSILON = 1e-5
 def normalize_min_max(tensor, new_max=1.0, new_min=0.0):
      return (tensor - tensor.min())/(tensor.max() - tensor.min() + EPSILON)*(new_max - new_min) + new_min
 
+def get_projections(camera, light_cam, batched_mesh_range_cam, device):
+    batched_w_cam = get_normed_w(camera, batched_mesh_range_cam, device=device)
+    # print(batched_w_cam)
+    K = get_diff_projections(batched_w_cam[:,:3], batched_w_cam[:,3], camera, light_cam, device=device)
+    return K
+    
 def run_shadow_mapping(res, camera, light_cam, batched_mesh_range_cam, meshed_normed_light_cam, device, mode='shadow_method_1', \
                        delta=1e-2, epsilon=0.0, new_min=0.0, new_max=1.0, sigmoid=False, use_numpy_meshgrid=True):
     """
@@ -56,7 +62,7 @@ def get_normed_w(camera, pixel_depth, device='cpu'):
 
 def get_diff_projections(pixels, w_cam, from_camera, to_camera, device='cpu'):
     """
-    pixels: [num_rays, 4] usually just meshed_range_cam[:,:3]
+    pixels: [num_rays, 3] usually just meshed_range_cam[:,:3]
     w_cam: [num_rays] usually just meshed_range_cam[:,3]
     """
 #     i, j, k = torch.unbind(pixels, axis=1)
@@ -87,7 +93,6 @@ def get_projected_depths(res, K, w_light, device='cpu'):
     vl = torch.maximum(torch.tensor(0.).to(device), vl_)
     vl = torch.minimum(torch.tensor(h-1.).to(device), vl)
 
-    w_light_bounded = w_light.view(w,h)[vl.to(torch.long),ul.to(torch.long)]
     w_light_bounded = w_light.view(w,h)[vl.to(torch.long),ul.to(torch.long)]
 
     return wl, w_light_bounded

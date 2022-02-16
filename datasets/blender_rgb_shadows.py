@@ -53,11 +53,11 @@ class BlenderRGBEfficientShadows(Dataset):
 
         # bounds, common for all scenes
         self.near = 1.0
-        self.far = 200.0
+        self.far = 1000.0
 
         # probably need to change this 
         self.light_near = 1.0
-        self.light_far = 200.0
+        self.light_far = 1000.0
 
         self.bounds = np.array([self.near, self.far])
         

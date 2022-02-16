@@ -479,5 +479,68 @@ def efficient_sm(cam_pixels, light_pixels, cam_results, light_results,
         shadow_maps_fine = shadow_maps_fine.view(-1, 3)
         cam_results['rgb_fine'] = shadow_maps_fine + EPSILON * torch.ones_like(shadow_maps_coarse)
 
-
     return cam_results
+
+def get_K(cam_pixels, cam_results, ppc, light_camera, fine_sampling):
+    def inference(ppc, light_camera, batched_mesh_range_cam):
+        """
+        ppc: [Batch_size] Camera Poses: instance of the Camera() class
+        light_camera: Instance of the Camera() class 
+        batched_mesh_range_cam: [num_rays, 4] (i, j, 1, depth] from camera viewpoints
+        """
+        proj_maps = []
+        curr_eye_pos = ppc['eye_pos'][0]
+        prev_split_at = 0
+        num_splits = 0 
+        curr_ppc = Camera.from_camera_eyepos(eye_pos=ppc['eye_pos'][0].squeeze(0), camera=ppc['camera'][0].squeeze(0))
+        for i in range(len(ppc['camera'])):
+            # each pixel can have a different viewpoint within the batch, 
+            # therefore we need to split them with the same (depth, pose) 
+            # print("PPC: {} {}".format(curr_eye_pos, ppc['eye_pos'][i]))
+            if not (torch.equal(curr_eye_pos, ppc['eye_pos'][i])):
+                sub_batch_mesh_range_cam = batched_mesh_range_cam[prev_split_at:i,:]
+                K = eff_sm.get_projections(curr_ppc, light_camera, sub_batch_mesh_range_cam, sub_batch_mesh_range_cam.device)
+                proj_maps += [K]
+                prev_split_at = i 
+                curr_eye_pos = ppc['eye_pos'][i]
+                curr_ppc = Camera.from_camera_eyepos(eye_pos=ppc['eye_pos'][i].squeeze(0), camera=ppc['camera'][i].squeeze(0))
+                num_splits += 1
+
+        if prev_split_at == 0: 
+            # print("Found No Splits...")
+            # means that all the pixels have the same viewpoint! we can batch them together
+            proj_maps = eff_sm.get_projections(curr_ppc, light_camera, batched_mesh_range_cam, batched_mesh_range_cam.device)
+        else: #prev_split_at < (len(ppc)-1): 
+            # do inference on the remaining 
+            # print("Doing inference on the last split from [{}:{}]".format(prev_split_at, len(ppc['camera'])))
+            sub_batch_mesh_range_cam = batched_mesh_range_cam[prev_split_at:,:]
+            K = eff_sm.get_projections(curr_ppc, light_camera, sub_batch_mesh_range_cam, sub_batch_mesh_range_cam.device)
+            # print("sm, {}, {}".format(sm.shape, len(shadow_maps)))
+            proj_maps += [K]
+            proj_maps = torch.cat(proj_maps, 0) # (num_rays, 3)
+            # print("shadow_maps.shape", shadow_maps.shape)
+
+        if num_splits > 5:
+            print("Split the batch of rays {} times. Not very efficient...".format(num_splits))
+        return proj_maps
+
+    # Do Shadow Mapping for Coarse Depth 
+    cam_depths_coarse = cam_results['depth_coarse'] # (N_rays)
+    cam_pixels = cam_pixels.to(cam_depths_coarse.device)
+    batched_mesh_range_cam_coarse = torch.cat([cam_pixels, cam_depths_coarse.view(-1,1)], dim=1)
+    # print(batched_mesh_range_cam_coarse)
+    # assert N_rays == cam_depths_coarse.shape[0]
+    # assert N_rays == light_depths_coarse.shape[0]
+    proj_maps_coarse = inference(ppc, light_camera, batched_mesh_range_cam_coarse)
+    proj_maps_coarse = proj_maps_coarse.view(-1,3)
+
+    FINE = True
+    proj_maps_fine = None
+    if fine_sampling and FINE: # sample points for fine model
+        cam_depths_fine = cam_results['depth_fine'] # (N_rays)
+        batched_mesh_range_cam_fine = torch.cat([cam_pixels, cam_depths_fine.view(-1,1)], dim=1)
+
+        proj_maps_fine = inference(ppc, light_camera, batched_mesh_range_cam_fine)
+        proj_maps_fine = proj_maps_fine.view(-1,3)
+
+    return proj_maps_coarse, proj_maps_fine

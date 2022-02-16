@@ -95,7 +95,7 @@ def get_opts():
     parser.add_argument('--Light_N_importance', type=int, default=0,
                         help='number of additional fine samples')
                         
-    parser.add_argument('--sample_light_depth_every', default=5, type=int,
+    parser.add_argument('--sample_light_depth_every', default=1, type=int,
                         help='sample_light_depth_every batch of rays.')
 
     parser.add_argument('--grad_on_light', default=False, action="store_true",

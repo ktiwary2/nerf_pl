@@ -25,13 +25,16 @@ class BlenderEfficientShadows(Dataset):
         if self.hparams is not None and self.hparams.black_and_white_test:
             self.black_and_white = True
         self.read_meta()
+        self.hparams.coords_trans = False
         print("------------")
         print("NOTE: self.hparams.coords_trans is set to {} ".format(self.hparams.coords_trans))
         print("------------")
 
     def read_meta(self):
+        # self.split = 'train'
         with open(os.path.join(self.root_dir,
-                               f"transforms_{self.split}.json"), 'r') as f:
+                               f"transforms_train.json"), 'r') as f:
+                            #    f"transforms_{self.split}.json"), 'r') as f:
             self.meta = json.load(f)
 
         w, h = self.img_wh
@@ -59,7 +62,7 @@ class BlenderEfficientShadows(Dataset):
         
         ### Light Camera Matrix 
         pose = np.array(self.meta['light_camera_transform_matrix'])[:3, :4]
-        l2w = torch.FloatTensor(pose)
+        self.l2w = torch.FloatTensor(pose)
 
         pixels_u = torch.arange(0, w, 1)
         pixels_v = torch.arange(0, h, 1)
@@ -69,7 +72,7 @@ class BlenderEfficientShadows(Dataset):
         self.light_pixels = torch.stack([i,j, torch.ones_like(i)], axis=-1).view(-1, 3) # (H*W,3)
 
         light_directions = get_ray_directions(h, w, self.light_camera_focal) # (h, w, 3)
-        rays_o, rays_d = get_rays(light_directions, l2w) # both (h*w, 3)
+        rays_o, rays_d = get_rays(light_directions, self.l2w) # both (h*w, 3)
         self.light_rays = torch.cat([rays_o, rays_d, 
                                         self.light_near*torch.ones_like(rays_o[:, :1]),
                                         self.light_far*torch.ones_like(rays_o[:, :1])],
@@ -78,8 +81,19 @@ class BlenderEfficientShadows(Dataset):
 
         hfov = self.meta['light_camera_angle_x'] * 180./np.pi
         self.light_ppc = Camera(hfov, (h, w))
-        self.light_ppc.set_pose_using_blender_matrix(l2w, self.hparams.coords_trans)
+        self.light_ppc.set_pose_using_blender_matrix(self.l2w, self.hparams.coords_trans)
         ### Light Camera Matrix 
+
+        # new_frames = []
+        # # only do on a single image
+        # for frame in self.meta['frames']:
+        #     if 'r_6' in frame['file_path']:
+        #         a = [frame, frame, frame, frame, frame]
+        #         new_frames.extend(a * 10)
+        #         break
+        
+        # self.meta['frames']  = new_frames
+
 
         if self.split == 'train': # create buffer of all rays and rgb data
             self.image_paths = []
@@ -88,8 +102,9 @@ class BlenderEfficientShadows(Dataset):
             self.all_rgbs = []
             self.all_ppc = []
             self.all_pixels = []
-            
+
             for frame in self.meta['frames']:
+                print("Processing Frame {}".format(frame['file_path']))
                 pose = np.array(frame['transform_matrix'])[:3, :4]
                 self.poses += [pose]
                 c2w = torch.FloatTensor(pose)
@@ -229,6 +244,7 @@ class BlenderEfficientShadows(Dataset):
                               self.near*torch.ones_like(rays_o[:, :1]),
                               self.far*torch.ones_like(rays_o[:, :1])],
                               1) # (H*W, 8)
+            # print("rays.shape", rays.shape)
             # valid_mask = (img[-1]>0).flatten() # (H*W) valid color area
 
             sample = {'rays': rays,

@@ -132,8 +132,6 @@ class NeRFSystem(LightningModule):
                           num_workers=0,
                           batch_size=1, # validate one image (H*W rays) at a time
                           pin_memory=True)
-    
-    # def get_light_depth_map(self, light_pixels, light_rays):
 
 
     def training_step(self, batch, batch_nb):
@@ -145,7 +143,7 @@ class NeRFSystem(LightningModule):
         assert len(ppc['eye_pos']) == rgbs.shape[0]
 
         cam_results = self(rays, N_importance=self.hparams.N_importance)
-        rays = None
+        # rays = None
 
         if self.current_light_depth_cnt % self.hparams.sample_light_depth_every == 0:
             print("Updating Light's Depth Map at {}".format(self.current_light_depth_cnt))
@@ -164,8 +162,8 @@ class NeRFSystem(LightningModule):
                     # maybe only use coarse depth for light? no need for fine? 
                     self.curr_light_results = self(self.light_rays.to(rgbs.device), 
                                     N_importance=self.curr_Light_N_importance)
-                    self.curr_light_results['opacity_coarse'] = None
-                    self.curr_light_results['opacity_fine'] = None
+                    # self.curr_light_results['opacity_coarse'] = None
+                    # self.curr_light_results['opacity_fine'] = None
         else:
             self.current_light_depth_cnt += 1 
         
@@ -235,8 +233,8 @@ class NeRFSystem(LightningModule):
             img = img.permute(2, 0, 1) # (3, H, W)
             img_gt = rgbs.view(H, W, 3).permute(2, 0, 1).cpu() # (3, H, W)
             # print(cam_results[f'disp_map_{typ}'], type(cam_results[f'disp_map_{typ}']))
-            disp = normalize_min_max(cam_results[f'disp_map_{typ}'].view(H, W))
-            disp8 = to8b(disp.cpu().numpy())
+            disp = visualize_depth(cam_results[f'disp_map_{typ}'].view(H, W), to_tensor=False)
+            disp8 = to8b(disp)
             depth8 = visualize_depth(cam_results[f'depth_{typ}'].view(H, W), to_tensor=False) 
             depth = visualize_depth(cam_results[f'depth_{typ}'].view(H, W)) # (3, H, W)
             if not os.path.exists(f'logs_rgb_eff_sm/logs/{self.hparams.exp_name}/imgs'):

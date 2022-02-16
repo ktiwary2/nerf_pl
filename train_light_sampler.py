@@ -6,13 +6,13 @@ import torch
 from collections import defaultdict
 
 from torch.utils.data import DataLoader
+from datasets import ray_utils
 from datasets import dataset_dict
 
 # models
 from models.nerf import Embedding, NeRF
-from models.rendering_shadows import render_rays, efficient_sm
-from models.efficient_shadow_mapping import normalize_min_max
-
+from models.rendering_shadows import render_rays, efficient_sm, get_K
+from models.efficient_shadow_mapping import normalize_min_max, get_normed_w, generate_shadow_map
 # optimizer, scheduler, visualization
 from utils import *
 
@@ -40,7 +40,6 @@ class NeRFSystem(LightningModule):
         self.hparams = hparams
 
         self.loss = loss_dict[hparams.loss_type]()
-        self.opacity_loss = loss_dict['opacity']()
 
         self.embedding_xyz = Embedding(3, 10) # 10 is the default number
         self.embedding_dir = Embedding(3, 4) # 4 is the default number
@@ -109,9 +108,12 @@ class NeRFSystem(LightningModule):
         self.train_dataset = dataset(split='train', **kwargs)
         self.val_dataset = dataset(split='val', **kwargs)
         ##### Set these since they are constant
-        self.light_rays = self.train_dataset.light_rays
+        self.l2w = self.train_dataset.l2w
+        self.light_focal = self.train_dataset.light_camera_focal
         self.light_pixels = self.train_dataset.light_pixels.view(-1,3)
         self.light_ppc = self.train_dataset.light_ppc
+        self.light_near = self.train_dataset.light_near
+        self.light_far = self.train_dataset.light_far
 
     def configure_optimizers(self):
         self.optimizer = get_optimizer(self.hparams, self.models)
@@ -145,60 +147,68 @@ class NeRFSystem(LightningModule):
         assert len(ppc['eye_pos']) == rgbs.shape[0]
 
         cam_results = self(rays, N_importance=self.hparams.N_importance)
-        rays = None
-
-        if self.current_light_depth_cnt % self.hparams.sample_light_depth_every == 0:
-            print("Updating Light's Depth Map at {}".format(self.current_light_depth_cnt))
-            self.current_light_depth_cnt = 1
-            if self.hparams.Light_N_importance == -1:
-                self.curr_Light_N_importance = int(np.random.choice([0,8,16,32]))        
-            else:
-                self.curr_Light_N_importance = self.hparams.Light_N_importance
-
-            if self.hparams.grad_on_light:
-                print("Using Gradients on Light") 
-                self.curr_light_results = self(self.light_rays.to(rgbs.device), 
-                                N_importance=self.curr_Light_N_importance, 
-                                were_gradients_computed=False)
-            else:
-                with torch.no_grad():
-                    # maybe only use coarse depth for light? no need for fine? 
-                    self.curr_light_results = self(self.light_rays.to(rgbs.device), 
-                                    N_importance=self.curr_Light_N_importance, 
-                                    were_gradients_computed=False)
-                    # self.curr_light_results['opacity_coarse'] = None
-                    # self.curr_light_results['opacity_fine'] = None
+        proj_maps_coarse, proj_maps_fine = get_K(cam_pixels, cam_results, ppc, self.light_ppc, (self.hparams.N_importance>0))
+        w,h = self.hparams.img_wh
+        print(proj_maps_coarse.shape)
+        device = proj_maps_coarse.device
+        if proj_maps_fine is not None: 
+            ul_, vl_, wl = torch.unbind(proj_maps_fine, dim=1)
+            ul = torch.maximum(torch.tensor(0.).to(device), ul_)
+            ul = torch.minimum(torch.tensor(w-1.).to(device), ul).long()
+            vl = torch.maximum(torch.tensor(0.).to(device), vl_)
+            vl = torch.minimum(torch.tensor(h-1.).to(device), vl).long()
         else:
-            self.current_light_depth_cnt += 1 
+            ul_, vl_, wl = torch.unbind(proj_maps_coarse, dim=1)
+            ul = torch.maximum(torch.tensor(0.).to(device), ul_)
+            ul = torch.minimum(torch.tensor(w-1.).to(device), ul).long()
+            vl = torch.maximum(torch.tensor(0.).to(device), vl_)
+            vl = torch.minimum(torch.tensor(h-1.).to(device), vl).long()
 
-        if self.hparams.batch_size == 1: 
-            ppc = [ppc]
-        
-        cam_results = efficient_sm(cam_pixels, self.light_pixels.to(rgbs.device),
-                        cam_results, self.curr_light_results, 
-                        ppc, self.light_ppc, 
-                        image_shape=self.hparams.img_wh,  
-                        fine_sampling=(self.hparams.N_importance > 0), 
-                        Light_N_importance=(self.curr_Light_N_importance>0), 
-                        shadow_method=self.hparams.shadow_method)
+        print("ul, vl", ul, vl, wl)
+        self.curr_Light_N_importance = self.hparams.Light_N_importance
+        # get light rays from ul,vl
+        light_directions = torch.stack([(ul-w/2)/self.light_focal, -(vl-h/2)/self.light_focal, -torch.ones_like(ul)], -1) # (H, W, 3)
+        # print("light directions", light_directions.shape)
+        rays_o, rays_d = ray_utils.get_rays(light_directions.to(rgbs.device), self.l2w.to(rgbs.device)) # num rays
+        light_rays = torch.cat([rays_o, rays_d, 
+                                    self.light_near*torch.ones_like(rays_o[:, :1]),
+                                    self.light_far*torch.ones_like(rays_o[:, :1])],
+                                    1).view(-1, 8).to(rgbs.device)
+        # print("light_rays", light_rays.shape)
+        i = ul.float() + 0.5 #.unsqueeze(2) 
+        j = vl.float()+ 0.5 #.unsqueeze(2)
+        light_pixels = torch.stack([i,j, torch.ones_like(i)], axis=-1).view(-1, 3).to(rgbs.device) # (H*W,3)
+        # print("light_pixels", light_pixels.shape, light_pixels.shape)
+        curr_light_results = self(light_rays.to(rgbs.device), 
+                            N_importance=self.curr_Light_N_importance, 
+                            were_gradients_computed=False)
+
+        if self.curr_Light_N_importance > 0:
+            range_light = curr_light_results['depth_fine']
+        else:
+            range_light = curr_light_results['depth_coarse']
+
+        mesh_range_light = torch.cat([light_pixels, range_light.view(-1,1)], dim=1).to(rgbs.device)
+        w_light = get_normed_w(self.light_ppc, mesh_range_light, device=rgbs.device).to(rgbs.device)
+        # print("w_light", w_light.shape, wl.shape)
+        sm = generate_shadow_map(wl, w_light[:,3], mode=self.hparams.shadow_method, delta=1e-2, 
+                            epsilon=0.0, new_min=0.0, new_max=1.0, sigmoid=False).to(rgbs.device)
+        if self.curr_Light_N_importance > 0 :
+            cam_results['rgb_coarse'] = sm
+            cam_results['fine'] = sm
+        else:
+            cam_results['rgb_coarse'] = sm
 
         # if (self.current_light_depth_cnt % self.hparams.sample_light_depth_every == 0) and (cam_results['rgb_coarse'].shape[0] > 5):
         #     print(shadow_maps_coarse[:5,:]) # only print the first elements 
 
-        log['train/loss'] = sm_loss = self.loss(cam_results, rgbs)
-        cam_opacity_loss = 0.0 # 1.0 * self.opacity_loss(cam_results, rgbs)
-        light_opacity_loss = 1.0 * self.opacity_loss(self.curr_light_results, rgbs)
-        op_loss = 2.0 * light_opacity_loss
-        # op_loss = 2.0 * (cam_opacity_loss + light_opacity_loss)
-        log['train_opactiy'] = op_loss
+        log['train/loss'] = loss = self.loss(cam_results, rgbs)
         typ = 'fine' if 'rgb_fine' in cam_results else 'coarse'
 
         with torch.no_grad():
             psnr_ = psnr(cam_results[f'rgb_{typ}'], rgbs)
             log['train/psnr'] = psnr_
 
-        # loss = sm_loss + op_loss
-        loss = op_loss
         return {'loss': loss,
                 'progress_bar': {'train_psnr': psnr_},
                 'log': log
@@ -214,24 +224,58 @@ class NeRFSystem(LightningModule):
         with torch.no_grad():
             cam_results = self(rays, N_importance=self.hparams.N_importance)
             rays = None
-            light_results = self(self.light_rays.to(rgbs.device), N_importance=self.hparams.N_importance, 
-                                 were_gradients_computed=False)
-            # ppc = [ppc]
-            # light_ppc = [light_ppc]
+            proj_maps_coarse, proj_maps_fine = get_K(cam_pixels, cam_results, ppc, self.light_ppc, (self.hparams.N_importance>0))
+            w,h = self.hparams.img_wh
+            print(proj_maps_coarse.shape)
+            device = proj_maps_coarse.device
+            if proj_maps_fine is not None: 
+                ul_, vl_, wl = torch.unbind(proj_maps_fine, dim=1)
+                ul = torch.maximum(torch.tensor(0.).to(device), ul_)
+                ul = torch.minimum(torch.tensor(w-1.).to(device), ul).long()
+                vl = torch.maximum(torch.tensor(0.).to(device), vl_)
+                vl = torch.minimum(torch.tensor(h-1.).to(device), vl).long()
+            else:
+                ul_, vl_, wl = torch.unbind(proj_maps_coarse, dim=1)
+                ul = torch.maximum(torch.tensor(0.).to(device), ul_)
+                ul = torch.minimum(torch.tensor(w-1.).to(device), ul).long()
+                vl = torch.maximum(torch.tensor(0.).to(device), vl_)
+                vl = torch.minimum(torch.tensor(h-1.).to(device), vl).long()
 
-            cam_results = efficient_sm(cam_pixels, self.light_pixels.to(rgbs.device),
-                        cam_results, light_results, 
-                        ppc, self.light_ppc, 
-                        image_shape=self.hparams.img_wh,  
-                        fine_sampling=(self.hparams.N_importance > 0), 
-                        Light_N_importance=(self.hparams.N_importance > 0), 
-                        shadow_method=self.hparams.shadow_method)
+            print("ul, vl", ul, vl)
+            self.curr_Light_N_importance = self.hparams.Light_N_importance
+            # get light rays from ul,vl
+            light_directions = torch.stack([(ul-w/2)/self.light_focal, -(vl-h/2)/self.light_focal, -torch.ones_like(ul)], -1) # (H, W, 3)
+            print("light directions", light_directions.shape)
+            rays_o, rays_d = ray_utils.get_rays(light_directions.to(rgbs.device), self.l2w.to(rgbs.device)) # num rays
+            light_rays = torch.cat([rays_o, rays_d, 
+                                        self.light_near*torch.ones_like(rays_o[:, :1]),
+                                        self.light_far*torch.ones_like(rays_o[:, :1])],
+                                        1).view(-1, 8).to(rgbs.device)
+            print("light_rays", light_rays)
+            i = ul.float() + 0.5 #.unsqueeze(2) 
+            j = vl.float()+ 0.5 #.unsqueeze(2)
+            light_pixels = torch.stack([i,j, torch.ones_like(i)], axis=-1).view(-1, 3).to(rgbs.device) # (H*W,3)
+            print("light_pixels", light_pixels, light_pixels.shape)
+            curr_light_results = self(light_rays.to(rgbs.device), 
+                                N_importance=self.curr_Light_N_importance, 
+                                were_gradients_computed=False)
 
-        cam_opacity_loss = 2.0 * self.opacity_loss(cam_results, rgbs)
-        light_opacity_loss = 1.0 * self.opacity_loss(light_results, rgbs)
-        op_loss = cam_opacity_loss + light_opacity_loss
+            if self.curr_Light_N_importance > 0:
+                range_light = curr_light_results['depth_fine']
+            else:
+                range_light = curr_light_results['depth_coarse']
 
-        log = {'val_loss': self.loss(cam_results, rgbs), 'val_op_loss': op_loss}
+            mesh_range_light = torch.cat([light_pixels, range_light.view(-1,1)], dim=1).to(rgbs.device)
+            w_light = get_normed_w(self.light_ppc, mesh_range_light, device=rgbs.device).to(rgbs.device)
+            print("w_light", w_light.shape, wl.shape)
+            sm = generate_shadow_map(wl, w_light[:,3], mode=self.hparams.shadow_method, delta=1e-2, 
+                                epsilon=0.0, new_min=0.0, new_max=1.0, sigmoid=False).to(rgbs.device)
+            if self.curr_Light_N_importance > 0 :
+                cam_results['rgb_coarse'] = sm
+                cam_results['fine'] = sm
+            else:
+                cam_results['rgb_coarse'] = sm
+        log = {'val_loss': self.loss(cam_results, rgbs)}
         typ = 'fine' if 'rgb_fine' in cam_results else 'coarse'
     
         if batch_nb == 0:
@@ -246,16 +290,16 @@ class NeRFSystem(LightningModule):
             disp8 = to8b(disp.cpu().numpy())
             depth8 = visualize_depth(cam_results[f'depth_{typ}'].view(H, W), to_tensor=False) 
             depth = visualize_depth(cam_results[f'depth_{typ}'].view(H, W)) # (3, H, W)
-            if not os.path.exists(f'eff_sm_updated_light_matrix/logs/{self.hparams.exp_name}/imgs'):
-                os.mkdir(f'eff_sm_updated_light_matrix/logs/{self.hparams.exp_name}/imgs')
-            filename = os.path.join(f'eff_sm_updated_light_matrix/logs/{self.hparams.exp_name}/imgs', 'gt_{:03d}.png'.format(self.current_epoch))
+            if not os.path.exists(f'light_sampler_logs/logs/{self.hparams.exp_name}/imgs'):
+                os.mkdir(f'light_sampler_logs/logs/{self.hparams.exp_name}/imgs')
+            filename = os.path.join(f'light_sampler_logs/logs/{self.hparams.exp_name}/imgs', 'gt_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, gt8)
-            filename = os.path.join(f'eff_sm_updated_light_matrix/logs/{self.hparams.exp_name}/imgs', 'rgb_{:03d}.png'.format(self.current_epoch))
+            filename = os.path.join(f'light_sampler_logs/logs/{self.hparams.exp_name}/imgs', 'rgb_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, rgb8)
-            filename = os.path.join(f'eff_sm_updated_light_matrix/logs/{self.hparams.exp_name}/imgs', 'depth_{:03d}.png'.format(self.current_epoch))
+            filename = os.path.join(f'light_sampler_logs/logs/{self.hparams.exp_name}/imgs', 'depth_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, depth8)
             # save disp
-            filename = os.path.join(f'eff_sm_updated_light_matrix/logs/{self.hparams.exp_name}/imgs', 'disp_{:03d}.png'.format(self.current_epoch))
+            filename = os.path.join(f'light_sampler_logs/logs/{self.hparams.exp_name}/imgs', 'disp_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, disp8)
 
 
@@ -280,14 +324,14 @@ class NeRFSystem(LightningModule):
 if __name__ == '__main__':
     hparams = get_opts()
     system = NeRFSystem(hparams)
-    checkpoint_callback = ModelCheckpoint(filepath=os.path.join(f'eff_sm_updated_light_matrix/ckpts/{hparams.exp_name}',
+    checkpoint_callback = ModelCheckpoint(filepath=os.path.join(f'light_sampler_logs/ckpts/{hparams.exp_name}',
                                                                 '{epoch:d}'),
                                           monitor='val/loss',
                                           mode='min',
                                           save_top_k=5,)
 
     logger = TestTubeLogger(
-        save_dir="eff_sm_updated_light_matrix/logs",
+        save_dir="light_sampler_logs/logs",
         name=hparams.exp_name,
         debug=False,
         create_git_tag=False
@@ -308,8 +352,3 @@ if __name__ == '__main__':
                       auto_scale_batch_size=False)
 
     trainer.fit(system)
-
-
-
-
-# python train_efficient_sm.py --dataset_name efficient_sm --root_dir ../../datasets/volumetric/results_500_light_inside_bounding_vol_v1/ --N_importance 64 --N_samples 64 --num_gpus 0 --img_wh 64 64 --noise_std 0 --num_epochs 200 --batch_size 1024 --optimizer adam --lr 0.00001 --exp_name no_grad_light_64_64_64_test --num_sanity_val_steps 0 --grad_on_light --Light_N_importance 0
