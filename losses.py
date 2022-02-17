@@ -46,11 +46,11 @@ class OpactiyLoss(nn.Module):
         targets: {0,1} gt shadow pixels
         """
         sm_idx, non_sm_idx = self.get_sm_pixels(targets)
-        print("sm_idx",len(sm_idx), sm_idx)
-        print("non_sm_idx", len(non_sm_idx), non_sm_idx)
+        # print("sm_idx",len(sm_idx), sm_idx)
+        # print("non_sm_idx", len(non_sm_idx), non_sm_idx)
         if len(sm_idx) > 0 and len(non_sm_idx) > 0:
             opactiy = inputs['opacity_coarse']
-            print("opactiy", opactiy.shape)
+            # print("opactiy", opactiy.shape)
             sm_opactiy = opactiy[sm_idx]
             non_sm_opactiy = opactiy[non_sm_idx]
             loss = self.coeff - self.loss(torch.mean(non_sm_opactiy), torch.mean(sm_opactiy))

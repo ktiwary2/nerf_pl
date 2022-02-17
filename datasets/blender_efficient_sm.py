@@ -6,6 +6,7 @@ import os
 from PIL import Image, ImageFilter
 from torchvision import transforms as T
 from models.camera import Camera
+from tqdm import tqdm
 
 from .ray_utils import *
 
@@ -38,13 +39,24 @@ class BlenderEfficientShadows(Dataset):
             self.meta = json.load(f)
 
         w, h = self.img_wh
-        self.focal = 0.5*800/np.tan(0.5*self.meta['camera_angle_x']) # original focal length
-                                                                     # when W=800
-        self.focal *= self.img_wh[0]/800 # modify focal length to match size self.img_wh
 
-        self.light_camera_focal = 0.5*800/np.tan(0.5*self.meta['light_camera_angle_x']) # original focal length
-                                                                     # when W=800
-        self.light_camera_focal *= self.img_wh[0]/800 # modify focal length to match size self.img_wh
+        if 'bunny' in self.root_dir:
+            res = 200 # these imgs have original size of 200 
+        else:
+            res = 800
+        print("-------------------------------")
+        print("RESOLUTION OF THE ORIGINAL IMAGE IS SET TO {}".format(res))
+        print("-------------------------------")
+
+        self.focal = 0.5*res/np.tan(0.5*self.meta['camera_angle_x']) # original focal length
+                                                                     # when W=res
+        self.focal *= self.img_wh[0]/res # modify focal length to match size self.img_wh
+        if 'bunny' in self.root_dir:
+            self.light_camera_focal = 0.5*res/np.tan(0.5*self.meta['light_angle_x']) # original focal length
+        else:
+            self.light_camera_focal = 0.5*res/np.tan(0.5*self.meta['light_camera_angle_x']) # original focal length
+                                                                     # when W=res
+        self.light_camera_focal *= self.img_wh[0]/res # modify focal length to match size self.img_wh
 
         # bounds, common for all scenes
         self.near = 1.0
@@ -61,7 +73,11 @@ class BlenderEfficientShadows(Dataset):
             get_ray_directions(h, w, self.focal) # (h, w, 3)
         
         ### Light Camera Matrix 
-        pose = np.array(self.meta['light_camera_transform_matrix'])[:3, :4]
+        ### Light Camera Matrix 
+        if 'bunny' in self.root_dir:
+            pose = np.array(self.meta['frames'][0]['light_transform'])[:3, :4]
+        else:
+            pose = np.array(self.meta['light_camera_transform_matrix'])[:3, :4]
         self.l2w = torch.FloatTensor(pose)
 
         pixels_u = torch.arange(0, w, 1)
@@ -78,21 +94,38 @@ class BlenderEfficientShadows(Dataset):
                                         self.light_far*torch.ones_like(rays_o[:, :1])],
                                         1) # (h*w, 8)
 
+        if 'bunny' in self.root_dir:
+            hfov = self.meta['light_angle_x'] * 180./np.pi
+        else:
+            hfov = self.meta['light_camera_angle_x'] * 180./np.pi
 
-        hfov = self.meta['light_camera_angle_x'] * 180./np.pi
         self.light_ppc = Camera(hfov, (h, w))
         self.light_ppc.set_pose_using_blender_matrix(self.l2w, self.hparams.coords_trans)
         ### Light Camera Matrix 
 
-        # new_frames = []
-        # # only do on a single image
-        # for frame in self.meta['frames']:
-        #     if 'r_6' in frame['file_path']:
-        #         a = [frame, frame, frame, frame, frame]
-        #         new_frames.extend(a * 10)
-        #         break
+        new_frames = []
+        # only do on a single image
+        for frame in self.meta['frames']:
+            if 'r_209' in frame['file_path']:
+                a = [frame]
+                new_frames.extend(a * 10)
+                break
         
-        # self.meta['frames']  = new_frames
+        self.meta['frames']  = new_frames
+
+        if self.split == 'val':
+            new_frames = []
+            for frame in self.meta['frames']:
+                ###### load the RGB+SM Image
+                file_path = frame['file_path'].split('/')
+                sm_file_path = 'sm_'+ file_path[-1]
+                sm_path = os.path.join(self.root_dir, f"{sm_file_path}.png")
+                ## Continue if not os.path.exists(shadows)
+                if not os.path.exists(sm_path):
+                    continue
+                else:
+                    new_frames.append(frame)
+            self.meta['frames']  = new_frames
 
 
         if self.split == 'train': # create buffer of all rays and rgb data
@@ -103,23 +136,28 @@ class BlenderEfficientShadows(Dataset):
             self.all_ppc = []
             self.all_pixels = []
 
-            for frame in self.meta['frames']:
-                print("Processing Frame {}".format(frame['file_path']))
-                pose = np.array(frame['transform_matrix'])[:3, :4]
-                self.poses += [pose]
-                c2w = torch.FloatTensor(pose)
-
-                hfov = self.meta['camera_angle_x'] * 180./np.pi
-                ppc = Camera(hfov, (h, w))
-                ppc.set_pose_using_blender_matrix(c2w, self.hparams.coords_trans)
-                self.all_ppc.extend([ppc]*h*w)
-
+            for frame in tqdm(self.meta['frames']):
                 #### change it to load the shadow map
                 file_path = frame['file_path'].split('/')
                 file_path = 'sm_'+ file_path[-1]
                 ################
                 image_path = os.path.join(self.root_dir, f"{file_path}.png")
                 self.image_paths += [image_path]
+                ## Continue if not os.path.exists(shadows)
+                if not os.path.exists(image_path):
+                    continue
+                print("Processing Frame {}".format(image_path))
+                ##### 
+                # real processing begins 
+                pose = np.array(frame['transform_matrix'])[:3, :4]
+                self.poses += [pose]
+                c2w = torch.FloatTensor(pose)
+
+
+                hfov = self.meta['camera_angle_x'] * 180./np.pi
+                ppc = Camera(hfov, (h, w))
+                ppc.set_pose_using_blender_matrix(c2w, self.hparams.coords_trans)
+                self.all_ppc.extend([ppc]*h*w)
 
                 img = Image.open(image_path)
                 img = img.resize(self.img_wh, Image.LANCZOS)

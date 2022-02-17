@@ -184,21 +184,24 @@ class NeRFSystem(LightningModule):
 
         # if (self.current_light_depth_cnt % self.hparams.sample_light_depth_every == 0) and (cam_results['rgb_coarse'].shape[0] > 5):
         #     print(shadow_maps_coarse[:5,:]) # only print the first elements 
-
-        log['train/loss'] = sm_loss = self.loss(cam_results, rgbs)
-        cam_opacity_loss = 0.0 # 1.0 * self.opacity_loss(cam_results, rgbs)
-        light_opacity_loss = 1.0 * self.opacity_loss(self.curr_light_results, rgbs)
-        op_loss = 2.0 * light_opacity_loss
+        # sm_loss = 10.0 * self.loss(cam_results, rgbs)
+        sm_loss = 1.0 * self.loss(cam_results, rgbs)
+        log['train/loss'] = sm_loss 
+        # cam_opacity_loss = 0.0 # 1.0 * self.opacity_loss(cam_results, rgbs)
+        # light_opacity_loss = 1.0 * self.opacity_loss(self.curr_light_results, rgbs)
+        light_opacity_loss = torch.tensor(0.0).to(sm_loss.device)
+        op_loss = 1.0 * light_opacity_loss
         # op_loss = 2.0 * (cam_opacity_loss + light_opacity_loss)
-        log['train_opactiy'] = op_loss
+        log['train/train_opactiy'] = op_loss
         typ = 'fine' if 'rgb_fine' in cam_results else 'coarse'
 
         with torch.no_grad():
             psnr_ = psnr(cam_results[f'rgb_{typ}'], rgbs)
             log['train/psnr'] = psnr_
 
+        loss = sm_loss
         # loss = sm_loss + op_loss
-        loss = op_loss
+        # loss = op_loss
         return {'loss': loss,
                 'progress_bar': {'train_psnr': psnr_},
                 'log': log
@@ -227,9 +230,10 @@ class NeRFSystem(LightningModule):
                         Light_N_importance=(self.hparams.N_importance > 0), 
                         shadow_method=self.hparams.shadow_method)
 
-        cam_opacity_loss = 2.0 * self.opacity_loss(cam_results, rgbs)
-        light_opacity_loss = 1.0 * self.opacity_loss(light_results, rgbs)
-        op_loss = cam_opacity_loss + light_opacity_loss
+        # cam_opacity_loss = 2.0 * self.opacity_loss(cam_results, rgbs)
+        # light_opacity_loss = 1.0 * self.opacity_loss(light_results, rgbs)
+        # op_loss = cam_opacity_loss + light_opacity_loss
+        op_loss = torch.tensor(0.0).to(rgbs.device)
 
         log = {'val_loss': self.loss(cam_results, rgbs), 'val_op_loss': op_loss}
         typ = 'fine' if 'rgb_fine' in cam_results else 'coarse'
@@ -246,16 +250,16 @@ class NeRFSystem(LightningModule):
             disp8 = to8b(disp.cpu().numpy())
             depth8 = visualize_depth(cam_results[f'depth_{typ}'].view(H, W), to_tensor=False) 
             depth = visualize_depth(cam_results[f'depth_{typ}'].view(H, W)) # (3, H, W)
-            if not os.path.exists(f'eff_sm_updated_light_matrix/logs/{self.hparams.exp_name}/imgs'):
-                os.mkdir(f'eff_sm_updated_light_matrix/logs/{self.hparams.exp_name}/imgs')
-            filename = os.path.join(f'eff_sm_updated_light_matrix/logs/{self.hparams.exp_name}/imgs', 'gt_{:03d}.png'.format(self.current_epoch))
+            if not os.path.exists(f'eff_sm_updated_light_matrix_NEW/logs/{self.hparams.exp_name}/imgs'):
+                os.mkdir(f'eff_sm_updated_light_matrix_NEW/logs/{self.hparams.exp_name}/imgs')
+            filename = os.path.join(f'eff_sm_updated_light_matrix_NEW/logs/{self.hparams.exp_name}/imgs', 'gt_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, gt8)
-            filename = os.path.join(f'eff_sm_updated_light_matrix/logs/{self.hparams.exp_name}/imgs', 'rgb_{:03d}.png'.format(self.current_epoch))
+            filename = os.path.join(f'eff_sm_updated_light_matrix_NEW/logs/{self.hparams.exp_name}/imgs', 'rgb_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, rgb8)
-            filename = os.path.join(f'eff_sm_updated_light_matrix/logs/{self.hparams.exp_name}/imgs', 'depth_{:03d}.png'.format(self.current_epoch))
+            filename = os.path.join(f'eff_sm_updated_light_matrix_NEW/logs/{self.hparams.exp_name}/imgs', 'depth_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, depth8)
             # save disp
-            filename = os.path.join(f'eff_sm_updated_light_matrix/logs/{self.hparams.exp_name}/imgs', 'disp_{:03d}.png'.format(self.current_epoch))
+            filename = os.path.join(f'eff_sm_updated_light_matrix_NEW/logs/{self.hparams.exp_name}/imgs', 'disp_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, disp8)
 
 
@@ -280,14 +284,14 @@ class NeRFSystem(LightningModule):
 if __name__ == '__main__':
     hparams = get_opts()
     system = NeRFSystem(hparams)
-    checkpoint_callback = ModelCheckpoint(filepath=os.path.join(f'eff_sm_updated_light_matrix/ckpts/{hparams.exp_name}',
+    checkpoint_callback = ModelCheckpoint(filepath=os.path.join(f'eff_sm_updated_light_matrix_NEW/ckpts/{hparams.exp_name}',
                                                                 '{epoch:d}'),
                                           monitor='val/loss',
                                           mode='min',
                                           save_top_k=5,)
 
     logger = TestTubeLogger(
-        save_dir="eff_sm_updated_light_matrix/logs",
+        save_dir="eff_sm_updated_light_matrix_NEW/logs",
         name=hparams.exp_name,
         debug=False,
         create_git_tag=False
