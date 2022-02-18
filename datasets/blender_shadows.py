@@ -34,7 +34,7 @@ class BlenderVariableLightDataset(Dataset):
         self.cam_hfov_deg = self.meta['camera_angle_x'] * 180./np.pi
         self.light_hfov_deg = self.meta['light_angle_x'] * 180./np.pi
         
-        if 'box' or 'bunny' in self.root_dir:
+        if 'box' or 'bunny' or 'vase' in self.root_dir:
             res = 200 # these imgs have original size of 200 
         else:
             res = 800
