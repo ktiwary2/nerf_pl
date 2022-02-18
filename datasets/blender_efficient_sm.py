@@ -40,7 +40,7 @@ class BlenderEfficientShadows(Dataset):
 
         w, h = self.img_wh
 
-        if 'bunny' in self.root_dir:
+        if 'bunny' or 'box' or 'vase' in self.root_dir:
             res = 200 # these imgs have original size of 200 
         else:
             res = 800
@@ -51,7 +51,7 @@ class BlenderEfficientShadows(Dataset):
         self.focal = 0.5*res/np.tan(0.5*self.meta['camera_angle_x']) # original focal length
                                                                      # when W=res
         self.focal *= self.img_wh[0]/res # modify focal length to match size self.img_wh
-        if 'bunny' in self.root_dir:
+        if 'bunny' or 'box' or 'vase' in self.root_dir:
             self.light_camera_focal = 0.5*res/np.tan(0.5*self.meta['light_angle_x']) # original focal length
         else:
             self.light_camera_focal = 0.5*res/np.tan(0.5*self.meta['light_camera_angle_x']) # original focal length
@@ -74,7 +74,7 @@ class BlenderEfficientShadows(Dataset):
         
         ### Light Camera Matrix 
         ### Light Camera Matrix 
-        if 'bunny' in self.root_dir:
+        if 'bunny' or 'box' or 'vase' in self.root_dir:
             pose = np.array(self.meta['frames'][0]['light_transform'])[:3, :4]
         else:
             pose = np.array(self.meta['light_camera_transform_matrix'])[:3, :4]
@@ -94,7 +94,7 @@ class BlenderEfficientShadows(Dataset):
                                         self.light_far*torch.ones_like(rays_o[:, :1])],
                                         1) # (h*w, 8)
 
-        if 'bunny' in self.root_dir:
+        if 'bunny' or 'box' or 'vase' in self.root_dir:
             hfov = self.meta['light_angle_x'] * 180./np.pi
         else:
             hfov = self.meta['light_camera_angle_x'] * 180./np.pi
@@ -103,15 +103,15 @@ class BlenderEfficientShadows(Dataset):
         self.light_ppc.set_pose_using_blender_matrix(self.l2w, self.hparams.coords_trans)
         ### Light Camera Matrix 
 
-        new_frames = []
-        # only do on a single image
-        for frame in self.meta['frames']:
-            if 'r_209' in frame['file_path']:
-                a = [frame]
-                new_frames.extend(a * 10)
-                break
+        # new_frames = []
+        # # only do on a single image
+        # for frame in self.meta['frames']:
+        #     if 'r_209' in frame['file_path']:
+        #         a = [frame]
+        #         new_frames.extend(a * 10)
+        #         break
         
-        self.meta['frames']  = new_frames
+        # self.meta['frames']  = new_frames
 
         if self.split == 'val':
             new_frames = []

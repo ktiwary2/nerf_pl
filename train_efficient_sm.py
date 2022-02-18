@@ -185,11 +185,11 @@ class NeRFSystem(LightningModule):
         # if (self.current_light_depth_cnt % self.hparams.sample_light_depth_every == 0) and (cam_results['rgb_coarse'].shape[0] > 5):
         #     print(shadow_maps_coarse[:5,:]) # only print the first elements 
         # sm_loss = 10.0 * self.loss(cam_results, rgbs)
-        sm_loss = 1.0 * self.loss(cam_results, rgbs)
+        sm_loss = 2.0 * self.loss(cam_results, rgbs)
         log['train/loss'] = sm_loss 
         # cam_opacity_loss = 0.0 # 1.0 * self.opacity_loss(cam_results, rgbs)
-        # light_opacity_loss = 1.0 * self.opacity_loss(self.curr_light_results, rgbs)
-        light_opacity_loss = torch.tensor(0.0).to(sm_loss.device)
+        light_opacity_loss = 1.0 * self.opacity_loss(self.curr_light_results, rgbs)
+        # light_opacity_loss = torch.tensor(0.0).to(sm_loss.device)
         op_loss = 1.0 * light_opacity_loss
         # op_loss = 2.0 * (cam_opacity_loss + light_opacity_loss)
         log['train/train_opactiy'] = op_loss
