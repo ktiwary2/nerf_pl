@@ -53,11 +53,11 @@ class BlenderRGBEfficientShadows(Dataset):
 
         # bounds, common for all scenes
         self.near = 1.0
-        self.far = 1000.0
+        self.far = 200.0
 
         # probably need to change this 
         self.light_near = 1.0
-        self.light_far = 1000.0
+        self.light_far = 200.0
 
         self.bounds = np.array([self.near, self.far])
         
@@ -93,6 +93,21 @@ class BlenderRGBEfficientShadows(Dataset):
             np.random.shuffle(self.meta['frames'])
             self.meta['frames'] = self.meta['frames'][:self.max_images] # take the first max 
 
+        if self.split == 'val':
+            new_frames = []
+            for frame in self.meta['frames']:
+                ###### load the RGB+SM Image
+                file_path = frame['file_path'].split('/')
+                sm_file_path = 'sm_'+ file_path[-1]
+                sm_path = os.path.join(self.root_dir, f"{sm_file_path}.png")
+                ## Continue if not os.path.exists(shadows)
+                if not os.path.exists(sm_path):
+                    continue
+                else:
+                    new_frames.append(frame)
+            self.meta['frames']  = new_frames
+
+
         if self.split == 'train': # create buffer of all rays and rgb data
             self.poses = []
             self.all_rays = []
@@ -102,6 +117,16 @@ class BlenderRGBEfficientShadows(Dataset):
             self.all_pixels = []
             
             for frame in self.meta['frames']:
+                #### change it to load the shadow map
+                file_path = frame['file_path'].split('/')
+                rgb_path = os.path.join(self.root_dir, f"{file_path[-1]}.png")
+                file_path = 'sm_'+ file_path[-1]
+                ################
+                image_path = os.path.join(self.root_dir, f"{file_path}.png")
+                ## Continue if not os.path.exists(shadows)
+                if not os.path.exists(image_path):
+                    continue
+
                 pose = np.array(frame['transform_matrix'])[:3, :4]
                 self.poses += [pose]
                 c2w = torch.FloatTensor(pose)
@@ -112,19 +137,13 @@ class BlenderRGBEfficientShadows(Dataset):
                 self.all_ppc.extend([ppc]*h*w)
 
                 #### load the rgb image
-                file_path = frame['file_path']
-                image_path = os.path.join(self.root_dir, f"{file_path}.png")
-                rgb = Image.open(image_path)
+                rgb = Image.open(rgb_path)
                 rgb = rgb.resize(self.img_wh, Image.LANCZOS)
                 rgb = self.transform(rgb) # (4, h, w)
                 rgb = rgb.view(4, -1).permute(1, 0) # (h*w, 4) RGBA
                 rgb = rgb[:, :3]*rgb[:, -1:] + (1-rgb[:, -1:]) # blend A to RGB
 
                 #### load the shadow map
-                file_path = frame['file_path'].split('/')
-                sm_file_path = 'sm_'+ file_path[-1]
-                image_path = os.path.join(self.root_dir, f"{sm_file_path}.png")
-
                 sm = Image.open(image_path)
                 sm = sm.resize(self.img_wh, Image.LANCZOS)
                 if not (self.hparams.blur == -1):
@@ -204,20 +223,21 @@ class BlenderRGBEfficientShadows(Dataset):
 
         else: # create data for each image separately
             frame = self.meta['frames'][idx]
-            #### load the rgb image
-            file_path = frame['file_path']
+            #### change it to load the shadow map
+            file_path = frame['file_path'].split('/')
+            rgb_path = os.path.join(self.root_dir, f"{file_path[-1]}.png")
+            file_path = 'sm_'+ file_path[-1]
+            ################
             image_path = os.path.join(self.root_dir, f"{file_path}.png")
-            rgb = Image.open(image_path)
+
+            #### load the rgb image
+            rgb = Image.open(rgb_path)
             rgb = rgb.resize(self.img_wh, Image.LANCZOS)
             rgb = self.transform(rgb) # (4, h, w)
             rgb = rgb.view(4, -1).permute(1, 0) # (h*w, 4) RGBA
             rgb = rgb[:, :3]*rgb[:, -1:] + (1-rgb[:, -1:]) # blend A to RGB
 
             #### load the shadow map
-            file_path = frame['file_path'].split('/')
-            sm_file_path = 'sm_'+ file_path[-1]
-            image_path = os.path.join(self.root_dir, f"{sm_file_path}.png")
-
             sm = Image.open(image_path)
             sm = sm.resize(self.img_wh, Image.LANCZOS)
             if not (self.hparams.blur == -1):

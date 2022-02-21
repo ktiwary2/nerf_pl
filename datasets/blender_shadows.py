@@ -19,6 +19,7 @@ class BlenderDatasetShadows(Dataset):
         self.define_transforms()
 
         self.white_back = True
+        self.white_back = False
         # self.white_back = False # Setting it to False (!)
         self.hparams = hparams
         self.black_and_white = False
