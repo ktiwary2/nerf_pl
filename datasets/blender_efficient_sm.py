@@ -40,11 +40,14 @@ class BlenderEfficientShadows(Dataset):
 
         w, h = self.img_wh
         print("Root Directory: ".format(self.root_dir))
-        if 'bunny' or 'box' or 'vase' in self.root_dir:
-            res = 200 # these imgs have original size of 200 
-        else:
-            res = 800
+        # if 'bunny' or 'box' or 'vase' in self.root_dir:
+        #     res = 200 # these imgs have original size of 200 
+        # else:
+        #     res = 800
+
         res = 800
+        if 'resolution' in self.meta.keys():
+            res = self.meta['resolution']
 
         print("-------------------------------")
         print("RESOLUTION OF THE ORIGINAL IMAGE IS SET TO {}".format(res))

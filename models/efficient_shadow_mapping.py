@@ -31,7 +31,9 @@ def run_shadow_mapping(res, camera, light_cam, batched_mesh_range_cam, meshed_no
         mode: see generate_shadow_map
     """
     batched_w_cam = get_normed_w(camera, batched_mesh_range_cam, device=device)
-    # print(batched_w_cam)
+    ##################### switch off 
+    # batched_w_cam = batched_mesh_range_cam
+    ##################### switch off 
     K = get_diff_projections(batched_w_cam[:,:3], batched_w_cam[:,3], camera, light_cam, device=device)
 
     wl_, w_light_bounded_ = get_projected_depths(res, K, meshed_normed_light_cam[:,3], device=device)

@@ -450,10 +450,10 @@ def efficient_sm(cam_pixels, light_pixels, cam_results, light_results,
         # This is not Batched, we do full inference on the light! 
         light_pixels = light_pixels.to(light_depths_coarse.device)
         mesh_range_light = torch.cat([light_pixels, light_depths_coarse.view(-1,1)], dim=1)
-        # print(mesh_range_light.shape, mesh_range_light)
+        ##################### switch off 
         meshed_normed_light_coarse = eff_sm.get_normed_w(light_camera, mesh_range_light, device=light_depths_coarse.device)
-        # print("meshed_normed_light_coarse.shape", meshed_normed_light_coarse.shape)
-
+        ##################### switch off 
+        # meshed_normed_light_coarse = mesh_range_light
         shadow_maps_coarse = inference(ppc, light_camera, image_shape, batched_mesh_range_cam_coarse, meshed_normed_light_coarse, shadow_method)
         # print("shadow_maps_coarse.shape", shadow_maps_coarse.shape)
         shadow_maps_coarse = shadow_maps_coarse.view(-1, 3)
@@ -470,7 +470,9 @@ def efficient_sm(cam_pixels, light_pixels, cam_results, light_results,
             light_depths_fine = light_results['depth_fine'] # (N_rays)
             mesh_range_light = torch.cat([light_pixels, light_depths_fine.view(-1,1)], dim=1)
             meshed_normed_light_fine = eff_sm.get_normed_w(light_camera, mesh_range_light, device=light_depths_fine.device)
-
+            ##################### switch off 
+            # meshed_normed_light_fine = mesh_range_light
+            ##################### switch off 
             shadow_maps_fine = inference(ppc, light_camera, image_shape, batched_mesh_range_cam_fine, meshed_normed_light_fine, shadow_method)
         else:
             shadow_maps_fine = inference(ppc, light_camera, image_shape, batched_mesh_range_cam_fine, meshed_normed_light_coarse, shadow_method)
