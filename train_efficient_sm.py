@@ -250,16 +250,16 @@ class NeRFSystem(LightningModule):
             disp8 = to8b(disp.cpu().numpy())
             depth8 = visualize_depth(cam_results[f'depth_{typ}'].view(H, W), to_tensor=False) 
             depth = visualize_depth(cam_results[f'depth_{typ}'].view(H, W)) # (3, H, W)
-            if not os.path.exists(f'eff_sm_updated_light_matrix_NEW_feb27/logs/{self.hparams.exp_name}/imgs'):
-                os.mkdir(f'eff_sm_updated_light_matrix_NEW_feb27/logs/{self.hparams.exp_name}/imgs')
-            filename = os.path.join(f'eff_sm_updated_light_matrix_NEW_feb27/logs/{self.hparams.exp_name}/imgs', 'gt_{:03d}.png'.format(self.current_epoch))
+            if not os.path.exists(f'eff_sm_updated_light_matrix_NEW_mar02/logs/{self.hparams.exp_name}/imgs'):
+                os.mkdir(f'eff_sm_updated_light_matrix_NEW_mar02/logs/{self.hparams.exp_name}/imgs')
+            filename = os.path.join(f'eff_sm_updated_light_matrix_NEW_mar02/logs/{self.hparams.exp_name}/imgs', 'gt_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, gt8)
-            filename = os.path.join(f'eff_sm_updated_light_matrix_NEW_feb27/logs/{self.hparams.exp_name}/imgs', 'rgb_{:03d}.png'.format(self.current_epoch))
+            filename = os.path.join(f'eff_sm_updated_light_matrix_NEW_mar02/logs/{self.hparams.exp_name}/imgs', 'rgb_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, rgb8)
-            filename = os.path.join(f'eff_sm_updated_light_matrix_NEW_feb27/logs/{self.hparams.exp_name}/imgs', 'depth_{:03d}.png'.format(self.current_epoch))
+            filename = os.path.join(f'eff_sm_updated_light_matrix_NEW_mar02/logs/{self.hparams.exp_name}/imgs', 'depth_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, depth8)
             # save disp
-            filename = os.path.join(f'eff_sm_updated_light_matrix_NEW_feb27/logs/{self.hparams.exp_name}/imgs', 'disp_{:03d}.png'.format(self.current_epoch))
+            filename = os.path.join(f'eff_sm_updated_light_matrix_NEW_mar02/logs/{self.hparams.exp_name}/imgs', 'disp_{:03d}.png'.format(self.current_epoch))
             imageio.imwrite(filename, disp8)
 
 
@@ -284,14 +284,14 @@ class NeRFSystem(LightningModule):
 if __name__ == '__main__':
     hparams = get_opts()
     system = NeRFSystem(hparams)
-    checkpoint_callback = ModelCheckpoint(filepath=os.path.join(f'eff_sm_updated_light_matrix_NEW_feb27/ckpts/{hparams.exp_name}',
+    checkpoint_callback = ModelCheckpoint(filepath=os.path.join(f'eff_sm_updated_light_matrix_NEW_mar02/ckpts/{hparams.exp_name}',
                                                                 '{epoch:d}'),
                                           monitor='val/loss',
                                           mode='min',
                                           save_top_k=5,)
 
     logger = TestTubeLogger(
-        save_dir="eff_sm_updated_light_matrix_NEW_feb27/logs",
+        save_dir="eff_sm_updated_light_matrix_NEW_mar02/logs",
         name=hparams.exp_name,
         debug=False,
         create_git_tag=False
