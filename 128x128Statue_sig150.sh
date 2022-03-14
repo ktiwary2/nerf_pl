@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH -n 8 --gres=gpu:volta:2
+#SBATCH -n 4 --gres=gpu:volta:2
 
 # Loading the required module
 source /etc/profile

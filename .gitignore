@@ -5,7 +5,7 @@ results/
 *.ply
 *.vol
 *.dae
-
+*.out
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
