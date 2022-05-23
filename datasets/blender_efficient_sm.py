@@ -120,6 +120,9 @@ class BlenderEfficientShadows(Dataset):
 
         self.light_ppc = Camera(hfov, (h, w))
         self.light_ppc.set_pose_using_blender_matrix(self.l2w, self.hparams.coords_trans)
+        print("LIGHT: c2w: {}\n, camera:{}\n, eye:{}\n".format(self.l2w, self.light_ppc.camera, self.light_ppc.eye_pos))
+
+
         ### Light Camera Matrix 
 
         # new_frames = []
@@ -199,6 +202,9 @@ class BlenderEfficientShadows(Dataset):
                                 self.near*torch.ones_like(rays_o[:, :1]),
                                 self.far*torch.ones_like(rays_o[:, :1])],
                                 1) # (H*W, 8)
+                print("-------------------------------")
+                print("frame: {}\n, c2w: {}\n, camera:{}\n, eye:{}\n".format(file_path, c2w, ppc.camera, ppc.eye_pos))
+                print("-------------------------------")
 
                 self.all_rgbs += [img]
                 self.all_rays += [rays]

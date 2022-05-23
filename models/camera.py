@@ -68,7 +68,8 @@ class Camera():
 
     def set_pose_using_blender_matrix(self, c2w, transform_coords=False):
         """
-        c2w: (type tensor) [3,4] doesn't know what the resolution of the image is (has the extrinsic parameters)
+        c2w: (type tensor) [3,4] doesn't know what the resolution 
+        of the image is (has the extrinsic parameters)
         pixels = K @ c2w @ p -> ppc @ p 
         """
         if transform_coords:

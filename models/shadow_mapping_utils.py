@@ -13,13 +13,13 @@ def run_shadow_mapping(res, camera, light_cam, range_cam, range_light, device, m
     """
     Run Shadow Mapping stack from start to finish in a differentiable manner. 
     Args: 
-        res: 
-        camera: 
-        light_cam:
-        range_cam: 
-        range_light:
-        device: 
-        mode:
+        res: (H,W)
+        camera: Camera Class
+        light_cam: Light Camera Class 
+        range_cam: Ray Termination Distance from Camera 
+        range_light: Ray Termination Distance from Light
+        device: gpu/cpu
+        mode: 
         etc. 
     """
     w_cam = differentiable_w_mapping(res, camera, range_cam, device=device, use_numpy_meshgrid=use_numpy_meshgrid)

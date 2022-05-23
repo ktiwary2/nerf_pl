@@ -359,15 +359,13 @@ EPSILON = 1e-5
 def efficient_sm(cam_pixels, light_pixels, cam_results, light_results, 
                  ppc, light_ppc, image_shape, fine_sampling, Light_N_importance, shadow_method):
     """
-    cam_pixels: [i,j,1]
-    light_pixels: [i,j,1]
+    cam_pixels: [i,j,1] of size (H,W)
+    light_pixels: [i,j,1] of size (H,W)
     cam_result: result dictionary with `depth_*`, `opacity_*`
     light_result: result dictionary with `depth_*`, `opacity_*`
-    rays: generated rays 
     ppc: [Batch_size] Camera Poses: instance of the Camera() class
     light_ppc: [1] Pose of the Camera at Light position 
-    batch_size: batch_size
-    fine_sampling: set fine_sampling
+    fine_sampling: set fine_sampling (bool)
     image_shape: IMAGE SHAPE OF THE CAMERA AT LIGHT POSITION 
     """
 
@@ -441,7 +439,7 @@ def efficient_sm(cam_pixels, light_pixels, cam_results, light_results,
         # Do Shadow Mapping for Coarse Depth 
         cam_depths_coarse = cam_results['depth_coarse'] # (N_rays)
         cam_pixels = cam_pixels.to(cam_depths_coarse.device)
-        batched_mesh_range_cam_coarse = torch.cat([cam_pixels, cam_depths_coarse.view(-1,1)], dim=1)
+        batched_mesh_range_cam_coarse = torch.cat([cam_pixels, cam_depths_coarse.view(-1,1)], dim=1) # [batch_size, 4]
         # print(batched_mesh_range_cam_coarse)
         # assert N_rays == cam_depths_coarse.shape[0]
         # assert N_rays == light_depths_coarse.shape[0]
@@ -449,7 +447,7 @@ def efficient_sm(cam_pixels, light_pixels, cam_results, light_results,
         light_depths_coarse = light_results['depth_coarse'] # (H*W)
         # This is not Batched, we do full inference on the light! 
         light_pixels = light_pixels.to(light_depths_coarse.device)
-        mesh_range_light = torch.cat([light_pixels, light_depths_coarse.view(-1,1)], dim=1)
+        mesh_range_light = torch.cat([light_pixels, light_depths_coarse.view(-1,1)], dim=1) # [H*W, 4]
         ##################### switch off 
         meshed_normed_light_coarse = eff_sm.get_normed_w(light_camera, mesh_range_light, device=light_depths_coarse.device)
         ##################### switch off 
